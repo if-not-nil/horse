@@ -1,0 +1,13 @@
+[project]
+name = "horse"
+version = "0.1.0"
+description = "it gallops"
+authors = [{ name = "horse", email = "qwool@proton.me" }]
+dependencies = ["rapidfuzz"]
+
+[project.scripts]
+horse = "horse.__main__:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
