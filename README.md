@@ -1,7 +1,7 @@
 # horse
 > gallops around your filesystem
 
-## how 2 use
+## how to use
 use it like you would `cd ls cd ls`  
 try pressing tab for going places and autocompletion  
 try pressing backspace when in a folder  
@@ -11,9 +11,7 @@ try going to a folder and pressing enter
 ## installation
 
 ```bash
-git clone http://github.com/if-not-nil/horse
-cd horse
-pipx install horse
+pipx install git+https://github.com/if-not-nil/horse
 ```
 make sure your $EDITOR variable is set
 
