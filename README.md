@@ -1,7 +1,7 @@
 # horse
-> gallops around your filesystem
+> gallop around your filesystem
 
-## how 2 use
+## how to use
 use it like you would `cd ls cd ls`  
 try pressing tab for going places and autocompletion  
 try pressing backspace when in a folder  
@@ -13,9 +13,9 @@ try going to a folder and pressing enter
 ```bash
 git clone http://github.com/if-not-nil/horse
 cd horse
-pipx install horse
+go build
 ```
-make sure your $EDITOR variable is set
+then copy it to your path somewhere
 
 then, you'll have to integrate it into your shell
 add this to the end of your shell's config
