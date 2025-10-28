@@ -148,9 +148,9 @@ func main() {
 			case tcell.KeyEscape, tcell.KeyCtrlC:
 				s.Fini()
 				os.Exit(1)
-			case tcell.KeyDown, tcell.KeyCtrlJ:
+			case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
 				state.MoveCursor(1)
-			case tcell.KeyUp, tcell.KeyCtrlK:
+			case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
 				state.MoveCursor(-1)
 			case tcell.KeyTab:
 				shouldQuit := state.Select()
