@@ -49,11 +49,19 @@ func main() {
 
 	quit_on_sel := func() {
 		s.Fini()
-		tmpFile.Write([]byte(path.Join(state.Pwd, state.Results[state.Selected])))
+
+		selectedPath := state.Select()
+		if selectedPath == "" {
+			os.Exit(0)
+		}
+		tmpFile.Write([]byte("$EDITOR "))
+		tmpFile.Write([]byte(selectedPath))
 		os.Exit(0)
 	}
+
 	quit_on_pwd := func() {
 		s.Fini()
+		tmpFile.Write([]byte("cd "))
 		tmpFile.Write([]byte(state.Pwd))
 		os.Exit(0)
 	}
@@ -90,15 +98,38 @@ func main() {
 
 		visibleHeight := height - 3
 		start := state.TopIndex
-		end := min(start + visibleHeight, len(filesToShow))
+		end := min(start+visibleHeight, len(filesToShow))
 
 		for i := start; i < end; i++ {
 			y := i - start + 2
 			name := filesToShow[i]
+
 			style := defStyle
+
+			isDir := false
+			if len(state.Results) > 0 {
+				for _, f := range state.Files {
+					if f.Name() == name {
+						isDir = f.IsDir()
+						break
+					}
+				}
+			} else if i < len(state.Files) {
+				isDir = state.Files[i].IsDir()
+			}
+
 			if state.Selected == i {
 				style = selStyle
 			}
+			if isDir {
+				name += "/"
+				if state.Selected == i {
+					style = style.Foreground(tcell.ColorBlack).Background(tcell.ColorBlue)
+				} else {
+					style = style.Foreground(tcell.ColorBlue).Background(tcell.ColorBlack)
+				}
+			}
+
 			drawText(s, 1, y, 999, y, style, name)
 		}
 	}
@@ -116,7 +147,7 @@ func main() {
 			switch ev.Key() {
 			case tcell.KeyEscape, tcell.KeyCtrlC:
 				s.Fini()
-				os.Exit(0)
+				os.Exit(1)
 			case tcell.KeyDown, tcell.KeyCtrlJ:
 				state.MoveCursor(1)
 			case tcell.KeyUp, tcell.KeyCtrlK:

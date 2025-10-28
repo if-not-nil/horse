@@ -1,34 +1,39 @@
 # horse
 > gallop around your filesystem
 
-## how to use
-use it like you would `cd ls cd ls`  
-try pressing tab for going places and autocompletion  
-try pressing backspace when in a folder  
-try opening a file  
-try going to a folder and pressing enter  
+```
+            .''
+  ._.-.___.' (`\
+ //(        ( `'
+'/ )\ ).__. ) 
+' <' `\ ._/'\
+   `   \     \
+```
 
-## installation
+## how to use
 
 ```bash
 git clone http://github.com/if-not-nil/horse
 cd horse
 go build
 ```
-then copy it to your path somewhere
 
-then, you'll have to integrate it into your shell
-add this to the end of your shell's config
+at first, i recommend you do
 
-### bash and zsh:
 ```bash
-function h() {
-    horse && source ~/.config/.horselast
-}
+alias h="horse && cat /tmp/horselast"
 ```
-### fish:
-```fish
-function h
-    horse; and source ~/.config/.horselast ^/dev/null
-end
-```  
+
+then, when you know what does what, 
+```bash
+alias h="horse && source /tmp/horselast"
+```
+
+use it like you would `cd ls cd ls`  
+try opening folders and files with tab
+try pressing backspace when in a folder  
+try pressing enter
+try going to a folder and pressing enter  
+try doing `Down`, `Up`, `<C-n>`, `<C-p>`, `<C-j>`, `<C-k>`
+try doing `<C-c>` and see how its different from `Enter`
+
