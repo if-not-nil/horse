@@ -22,10 +22,10 @@ go build
 cp ./horse ~/.local/bin/horse # or wherever your path points
 
 # if you haven't tamed the horse yet, do this to see what the consequences of your actions could be
-alias h="horse && cat /tmp/horselast"
+horse
 
 # when you're comfortable,
-alias h="horse && source /tmp/horselast"
+alias h='eval "$(horse)"'
 ```
 
 - use it like you would `cd ls cd ls`  

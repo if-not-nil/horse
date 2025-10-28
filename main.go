@@ -47,24 +47,22 @@ func main() {
 	}
 	state.SwitchDir(a)
 
-	quit_on_sel := func() {
-		s.Fini()
+quit_on_sel := func() {
+	s.Fini()
 
-		selectedPath := state.Select()
-		if selectedPath == "" {
-			os.Exit(0)
-		}
-		tmpFile.Write([]byte("$EDITOR "))
-		tmpFile.Write([]byte(selectedPath))
+	selectedPath := state.Select()
+	if selectedPath == "" {
 		os.Exit(0)
 	}
+	fmt.Println("$EDITOR", selectedPath)
+	os.Exit(0)
+}
 
-	quit_on_pwd := func() {
-		s.Fini()
-		tmpFile.Write([]byte("cd "))
-		tmpFile.Write([]byte(state.Pwd))
-		os.Exit(0)
-	}
+quit_on_pwd := func() {
+	s.Fini()
+	fmt.Println("cd", state.Pwd)
+	os.Exit(0)
+}
 
 	redraw := func() {
 		s.Clear()
