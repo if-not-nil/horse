@@ -20,7 +20,7 @@ type State struct {
 	Pwd      string
 	Input    string
 	Files    []os.DirEntry
-	Results  []string
+	Results  []os.DirEntry
 	Selected int
 	TopIndex int
 }
@@ -115,14 +115,13 @@ func main() {
 
 			isDir := false
 			if len(state.Results) > 0 {
-				for _, f := range state.Files {
-					if f.Name() == name {
-						isDir = f.IsDir()
-						break
-					}
+				if i < len(state.Results) {
+					fullPath := path.Join(state.Pwd, state.Results[i].Name())
+					isDir = isDirEntry(fullPath, state.Results[i])
 				}
 			} else if i < len(state.Files) {
-				isDir = state.Files[i].IsDir()
+				fullPath := path.Join(state.Pwd, state.Files[i].Name())
+				isDir = isDirEntry(fullPath, state.Files[i])
 			}
 
 			if state.Selected == i {
@@ -214,38 +213,54 @@ func (s *State) doInput(what rune) {
 	s.TopIndex = 0
 }
 
-func (s *State) search(query string) []string {
+func (s *State) search(query string) []os.DirEntry {
 	if query == "" {
 		return nil
 	}
 
-	var mapped []string
-	for _, f := range s.Files {
-		mapped = append(mapped, f.Name())
-	}
+	var exact, prefix, fuzzyMatches []os.DirEntry
 
 	// prefix and exact matches first
-	var exact, prefix, fuzzyMatches []string
-	for _, name := range mapped {
+	for _, f := range s.Files {
+		name := f.Name()
 		switch {
 		case name == query:
-			exact = append(exact, name)
+			exact = append(exact, f)
 		case strings.HasPrefix(name, query):
-			prefix = append(prefix, name)
+			prefix = append(prefix, f)
 		default:
-			fuzzyMatches = append(fuzzyMatches, name)
+			fuzzyMatches = append(fuzzyMatches, f)
 		}
 	}
 
 	// fuzzy matches on the rest
-	fuzzyMatches = fuzzy.Find(query, fuzzyMatches)
+	names := make([]string, len(fuzzyMatches))
+	for i, f := range fuzzyMatches {
+		names[i] = f.Name()
+	}
 
-	return append(append(exact, prefix...), fuzzyMatches...)
+	matchedNames := fuzzy.Find(query, names)
+	var fuzzyRanked []os.DirEntry
+	for _, name := range matchedNames {
+		for _, f := range fuzzyMatches {
+			if f.Name() == name {
+				fuzzyRanked = append(fuzzyRanked, f)
+				break
+			}
+		}
+	}
+
+	// Combine results: exact → prefix → fuzzy
+	return append(append(exact, prefix...), fuzzyRanked...)
 }
 
 func (s *State) CurrentList() []string {
 	if len(s.Results) > 0 {
-		return s.Results
+		names := make([]string, len(s.Results))
+		for i, f := range s.Results {
+			names[i] = f.Name()
+		}
+		return names
 	}
 	names := make([]string, len(s.Files))
 	for i, f := range s.Files {
@@ -276,24 +291,18 @@ func (s *State) MoveCursor(n int) {
 }
 
 func (s *State) Select() string {
-	var selectedName string
+	var selected os.DirEntry
 	if len(s.Results) > 0 {
-		selectedName = s.Results[s.Selected]
+		selected = s.Results[s.Selected]
 	} else {
-		selectedName = s.Files[s.Selected].Name()
+		selected = s.Files[s.Selected]
 	}
 
-	for _, f := range s.Files {
-		if f.Name() == selectedName {
-			if f.IsDir() {
-				s.SwitchDir(path.Join(s.Pwd, f.Name()))
-				break
-			} else {
-				return path.Join(s.Pwd, f.Name())
-			}
-		}
+	if isDirEntry(path.Join(s.Pwd, selected.Name()), selected) {
+		s.SwitchDir(path.Join(s.Pwd, selected.Name()))
+		return ""
 	}
-	return ""
+	return path.Join(s.Pwd, selected.Name())
 }
 
 func (s *State) SwitchDir(where string) {
@@ -328,4 +337,24 @@ func drawText(s tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text string
 			break
 		}
 	}
+}
+
+// makes sure symlinks to directories work right
+func isDirEntry(path string, entry os.DirEntry) bool {
+	info, err := entry.Info()
+	if err != nil {
+		return false
+	}
+
+	if info.IsDir() {
+		return true
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Stat(path)
+		if err == nil && target.IsDir() {
+			return true
+		}
+	}
+	return false
 }
