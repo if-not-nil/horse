@@ -25,6 +25,9 @@ func main() {
 		log.Fatalf("%+v", err)
 	}
 	tmpFile, err := os.Create("/tmp/horselast")
+	if err != nil {
+		panic("couldnt create /tmp/horselast")
+	}
 	defer tmpFile.Close()
 
 	defStyle := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
@@ -58,27 +61,45 @@ func main() {
 	redraw := func() {
 		s.Clear()
 
-		var filesToShow []string
-		if len(state.Results) > 0 {
-			filesToShow = state.Results
-		} else {
-			for _, f := range state.Files {
-				filesToShow = append(filesToShow, f.Name())
-			}
-		}
+		filesToShow := state.CurrentList()
+
 		pwdLen := len(state.Pwd) + 1
 		drawText(s, 1, 1, pwdLen, 1, defStyle, state.Pwd)
-		if len(filesToShow) > 0 {
+
+		if len(filesToShow) > 0 && state.Selected < len(filesToShow) {
 			drawText(s, pwdLen, 1, 999, 1, sgStyle, filesToShow[state.Selected])
 		}
+
 		drawText(s, pwdLen, 1, 999, 1, defStyle, state.Input)
 
-		for i, name := range filesToShow {
+		scrollInfo := fmt.Sprintf("[%d/%d]", state.Selected+1, len(filesToShow))
+		drawText(s, width-len(scrollInfo)-2, 1, 999, 1, sgStyle, scrollInfo)
+
+		if len(filesToShow) == 0 {
+			drawText(s, 1, 3, 999, 3, sgStyle, "(empty)")
+			s.Show()
+			return
+		}
+
+		if state.Selected >= len(filesToShow) {
+			state.Selected = len(filesToShow) - 1
+		}
+		if state.TopIndex > state.Selected {
+			state.TopIndex = state.Selected
+		}
+
+		visibleHeight := height - 3
+		start := state.TopIndex
+		end := min(start + visibleHeight, len(filesToShow))
+
+		for i := start; i < end; i++ {
+			y := i - start + 2
+			name := filesToShow[i]
+			style := defStyle
 			if state.Selected == i {
-				drawText(s, 1, i+2, 999, i+2, selStyle, name)
-			} else {
-				drawText(s, 1, i+2, 999, i+2, defStyle, name)
+				style = selStyle
 			}
+			drawText(s, 1, y, 999, y, style, name)
 		}
 	}
 	redraw()
@@ -120,21 +141,27 @@ func main() {
 
 func (s *State) backspace() {
 	if len(s.Input) < 1 {
-		splitPwd := strings.Split(s.Pwd, "/")
-
-		newPwd := splitPwd[:len(splitPwd)-2]
-		newPath := path.Join(newPwd...)
-		s.SwitchDir(fmt.Sprint("/", newPath))
+		splitPwd := strings.Split(strings.TrimSuffix(s.Pwd, "/"), "/")
+		if len(splitPwd) > 1 {
+			newPwd := strings.Join(splitPwd[:len(splitPwd)-1], "/")
+			s.SwitchDir(fmt.Sprint("/", newPwd))
+		}
 		return
 	}
+
 	modified := s.Input[:len(s.Input)-1]
 	results := s.search(modified)
 	if len(results) == 0 {
-		return
-	} else {
 		s.Input = modified
-		s.Results = results
+		s.Results = nil
+		s.Selected = 0
+		s.TopIndex = 0
+		return
 	}
+	s.Input = modified
+	s.Results = results
+	s.Selected = 0
+	s.TopIndex = 0
 }
 
 func (s *State) doInput(what rune) {
@@ -142,10 +169,11 @@ func (s *State) doInput(what rune) {
 	results := s.search(modified)
 	if len(results) == 0 {
 		return
-	} else {
-		s.Input = modified
-		s.Results = results
 	}
+	s.Input = modified
+	s.Results = results
+	s.Selected = 0
+	s.TopIndex = 0
 }
 
 func (s *State) search(query string) []string {
@@ -164,15 +192,38 @@ type State struct {
 	Files    []os.DirEntry
 	Results  []string
 	Selected int
+	TopIndex int
+}
+
+func (s *State) CurrentList() []string {
+	if len(s.Results) > 0 {
+		return s.Results
+	}
+	names := make([]string, len(s.Files))
+	for i, f := range s.Files {
+		names[i] = f.Name()
+	}
+	return names
 }
 
 func (s *State) MoveCursor(n int) {
-	if s.Selected+n > len(s.Files)-1 {
+	list := s.CurrentList()
+	if len(list) == 0 {
+		return
+	}
+
+	s.Selected += n
+	if s.Selected < 0 {
+		s.Selected = len(list) - 1
+	} else if s.Selected >= len(list) {
 		s.Selected = 0
-	} else if s.Selected+n < 0 {
-		s.Selected = len(s.Files) - 1
-	} else {
-		s.Selected += n
+	}
+
+	visibleHeight := height - 3
+	if s.Selected < s.TopIndex {
+		s.TopIndex = s.Selected
+	} else if s.Selected >= s.TopIndex+visibleHeight {
+		s.TopIndex = s.Selected - visibleHeight + 1
 	}
 }
 
