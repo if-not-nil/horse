@@ -16,6 +16,15 @@ var (
 	height = 20
 )
 
+type State struct {
+	Pwd      string
+	Input    string
+	Files    []os.DirEntry
+	Results  []string
+	Selected int
+	TopIndex int
+}
+
 func main() {
 	s, err := tcell.NewScreen()
 	if err != nil {
@@ -47,22 +56,22 @@ func main() {
 	}
 	state.SwitchDir(a)
 
-quit_on_sel := func() {
-	s.Fini()
+	quit_on_sel := func() {
+		s.Fini()
 
-	selectedPath := state.Select()
-	if selectedPath == "" {
+		selectedPath := state.Select()
+		if selectedPath == "" {
+			os.Exit(0)
+		}
+		fmt.Println("$EDITOR", selectedPath)
 		os.Exit(0)
 	}
-	fmt.Println("$EDITOR", selectedPath)
-	os.Exit(0)
-}
 
-quit_on_pwd := func() {
-	s.Fini()
-	fmt.Println("cd", state.Pwd)
-	os.Exit(0)
-}
+	quit_on_pwd := func() {
+		s.Fini()
+		fmt.Println("cd", state.Pwd)
+		os.Exit(0)
+	}
 
 	redraw := func() {
 		s.Clear()
@@ -206,22 +215,32 @@ func (s *State) doInput(what rune) {
 }
 
 func (s *State) search(query string) []string {
+	if query == "" {
+		return nil
+	}
+
 	var mapped []string
 	for _, f := range s.Files {
 		mapped = append(mapped, f.Name())
 	}
-	res := fuzzy.Find(query, mapped)
-	// log.Println(res)
-	return res
-}
 
-type State struct {
-	Pwd      string
-	Input    string
-	Files    []os.DirEntry
-	Results  []string
-	Selected int
-	TopIndex int
+	// prefix and exact matches first
+	var exact, prefix, fuzzyMatches []string
+	for _, name := range mapped {
+		switch {
+		case name == query:
+			exact = append(exact, name)
+		case strings.HasPrefix(name, query):
+			prefix = append(prefix, name)
+		default:
+			fuzzyMatches = append(fuzzyMatches, name)
+		}
+	}
+
+	// fuzzy matches on the rest
+	fuzzyMatches = fuzzy.Find(query, fuzzyMatches)
+
+	return append(append(exact, prefix...), fuzzyMatches...)
 }
 
 func (s *State) CurrentList() []string {
