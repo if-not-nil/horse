@@ -16,14 +16,9 @@
 ## how to use
 
 ```bash
-git clone http://github.com/if-not-nil/horse
-cd horse
-go build
-cp ./horse ~/.local/bin/horse # or wherever your path points
-
+go install http://github.com/if-not-nil/horse@latest
 # if you haven't tamed the horse yet, do this to see what the consequences of your actions could be
 horse
-
 # when you're comfortable,
 alias h='eval "$(horse)"'
 ```
