@@ -172,12 +172,13 @@ func main() {
 				state.backspace(true)
 			case tcell.KeyCtrlE:
 				home_dir, err := os.UserHomeDir()
-				path.Clean(home_dir)
-
-				if err != nil {
-					home_dir = path.Clean("/")
+				target_dir := home_dir
+				if err != nil || path.Clean(state.Pwd) == path.Clean(home_dir) {
+					target_dir = path.Clean("/")
 				}
-				state.SwitchDir(home_dir)
+				target_dir = path.Clean(target_dir)
+
+				state.SwitchDir(target_dir)
 			case tcell.KeyRune:
 				state.doInput(ev.Rune())
 			}

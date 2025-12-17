@@ -42,7 +42,7 @@ Up, <C-K>, <C-P>:
 C-w:
     delete word
 C-e:
-    go to the home directory
+    go to `~` or `/`
 Tab:
     select an entry. if a file, open, if a directory, enter
 Enter:
