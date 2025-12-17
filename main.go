@@ -1,3 +1,4 @@
+// horse: https://github.com/if-not-nil/horse
 package main
 
 import (
@@ -44,7 +45,6 @@ func main() {
 	sgStyle := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
 	s.SetStyle(defStyle)
 
-	// Clear screen
 	s.Clear()
 
 	width, height = s.Size()
@@ -154,6 +154,7 @@ func main() {
 			case tcell.KeyEscape, tcell.KeyCtrlC:
 				s.Fini()
 				os.Exit(1)
+			// scrolling
 			case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
 				state.MoveCursor(1)
 			case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
@@ -166,7 +167,17 @@ func main() {
 			case tcell.KeyEnter:
 				quit_on_pwd()
 			case tcell.KeyBackspace, tcell.KeyBackspace2:
-				state.backspace()
+				state.backspace(false)
+			case tcell.KeyCtrlW:
+				state.backspace(true)
+			case tcell.KeyCtrlE:
+				home_dir, err := os.UserHomeDir()
+				path.Clean(home_dir)
+
+				if err != nil {
+					home_dir = path.Clean("/")
+				}
+				state.SwitchDir(home_dir)
 			case tcell.KeyRune:
 				state.doInput(ev.Rune())
 			}
@@ -176,7 +187,7 @@ func main() {
 	}
 }
 
-func (s *State) backspace() {
+func (s *State) backspace(full_word bool) {
 	if len(s.Input) < 1 {
 		splitPwd := strings.Split(strings.TrimSuffix(s.Pwd, "/"), "/")
 		if len(splitPwd) > 1 {
@@ -186,7 +197,11 @@ func (s *State) backspace() {
 		return
 	}
 
-	modified := s.Input[:len(s.Input)-1]
+	modified := ""
+	if !full_word {
+		modified = s.Input[:len(s.Input)-1]
+	}
+
 	results := s.search(modified)
 	if len(results) == 0 {
 		s.Input = modified
@@ -205,6 +220,8 @@ func (s *State) doInput(what rune) {
 	modified := fmt.Sprint(s.Input, string(what))
 	results := s.search(modified)
 	if len(results) == 0 {
+		length := len(s.Input)
+		s.Input = s.Results[0].Name()[:length]
 		return
 	}
 	s.Input = modified
@@ -239,7 +256,7 @@ func (s *State) search(query string) []os.DirEntry {
 		names[i] = f.Name()
 	}
 
-	matchedNames := fuzzy.Find(query, names)
+	matchedNames := fuzzy.FindFold(query, names)
 	var fuzzyRanked []os.DirEntry
 	for _, name := range matchedNames {
 		for _, f := range fuzzyMatches {
@@ -250,7 +267,6 @@ func (s *State) search(query string) []os.DirEntry {
 		}
 	}
 
-	// Combine results: exact → prefix → fuzzy
 	return append(append(exact, prefix...), fuzzyRanked...)
 }
 
