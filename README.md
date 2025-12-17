@@ -39,6 +39,10 @@ Down, <C-J>, <C-N>:
     cursor down
 Up, <C-K>, <C-P>:
     cursor up
+C-w:
+    delete word
+C-e:
+    go to the home directory
 Tab:
     select an entry. if a file, open, if a directory, enter
 Enter:
