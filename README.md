@@ -1,4 +1,3 @@
-
 # horse
 
 <img width="367" height="190" alt="image" src="https://github.com/user-attachments/assets/de70b9d1-6810-4834-8eb2-68369b8c5427" />
@@ -13,7 +12,7 @@
 ```
 
 
-## how to use
+** how to use **
 
 ```bash
 go install github.com/if-not-nil/horse@latest
@@ -31,7 +30,8 @@ alias h='eval "$(horse)"'
 - try doing `Down`, `Up`, `<C-n>`, `<C-p>`, `<C-j>`, `<C-k>`
 - try doing `<C-c>` and see how its different from `Enter`
 
-## keymap
+** keymap **
+
 ```
 Escape, <C-C>:
     exit without saving
@@ -50,3 +50,9 @@ Enter:
 Backspace:
     erase a character or go back a directory
 ```
+
+**plans**
+
+- [ ] (C-h or C-b), (C-l or C-f) is up and down direcectories
+- [ ] C-s copies the selected item's path
+- [ ] retain the last selection when going between directories
