@@ -17,6 +17,7 @@ var (
 	width     = 20
 	height    = 20
 	STYLE_BG  = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
+	STYLE_DIR = tcell.StyleDefault.Background(tcell.ColorBlack).Foreground(tcell.ColorBlue)
 	STYLE_FG  = tcell.StyleDefault.Background(tcell.ColorWhite).Foreground(tcell.ColorBlack)
 	STYLE_MID = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
 )
@@ -28,6 +29,98 @@ type State struct {
 	Results  []os.DirEntry
 	Selected int
 	TopIndex int
+}
+
+func main() {
+	s, err := tcell.NewScreen()
+	if err != nil {
+		log.Fatalf("%+v", err)
+	}
+	if err := s.Init(); err != nil {
+		log.Fatalf("%+v", err)
+	}
+	width, height = s.Size()
+	tmpFile, err := os.Create("/tmp/horselast")
+	if err != nil {
+		panic("couldnt create /tmp/horselast")
+	}
+	defer tmpFile.Close()
+
+	s.SetStyle(STYLE_BG)
+
+	s.Clear()
+
+	var state State
+	a, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err, "getpwd")
+	}
+	state.SwitchDir(a)
+
+	quit_on_sel := func() {
+		s.Fini()
+
+		selectedPath := state.Select()
+		if selectedPath == "" {
+			os.Exit(0)
+		}
+		fmt.Println("$EDITOR", selectedPath)
+		os.Exit(0)
+	}
+
+	quit_on_pwd := func() {
+		s.Fini()
+		fmt.Println("cd", state.Pwd)
+		os.Exit(0)
+	}
+
+	state.Redraw(s)
+
+	for {
+		s.Show()
+
+		ev := s.PollEvent()
+
+		switch ev := ev.(type) {
+		case *tcell.EventResize:
+			s.Sync()
+		case *tcell.EventKey:
+			switch ev.Key() {
+			case tcell.KeyEscape, tcell.KeyCtrlC:
+				s.Fini()
+				os.Exit(1)
+			// scrolling
+			case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
+				state.MoveCursor(1)
+			case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
+				state.MoveCursor(-1)
+			case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF:
+				shouldQuit := state.Select()
+				if shouldQuit != "" {
+					quit_on_sel()
+				}
+			case tcell.KeyEnter:
+				quit_on_pwd()
+			case tcell.KeyBackspace, tcell.KeyBackspace2, tcell.KeyCtrlB:
+				state.backspace(false)
+			case tcell.KeyCtrlW:
+				state.backspace(true)
+			case tcell.KeyCtrlE:
+				home_dir, err := os.UserHomeDir()
+				target_dir := home_dir
+				if err != nil || path.Clean(state.Pwd) == path.Clean(home_dir) {
+					target_dir = path.Clean("/")
+				}
+				target_dir = path.Clean(target_dir)
+
+				state.SwitchDir(target_dir)
+			case tcell.KeyRune:
+				state.doInput(ev.Rune())
+			}
+			state.Redraw(s)
+		}
+
+	}
 }
 
 //
@@ -53,20 +146,21 @@ func drawText(s tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text string
 func (state *State) Redraw(s tcell.Screen) {
 	s.Clear()
 	selected_entry := state.Files[state.Selected]
+	full_path := path.Join(state.Pwd, selected_entry.Name())
 
-	if !selected_entry.IsDir() {
+	if selected_entry.IsDir() {
+		DrawDirPreview(s, full_path, width/2, 0, width-1, height-1)
+	} else {
 		info, err := selected_entry.Info()
 		if err != nil || info.Size() > 50*1000 { // 20kb
 			return
 		}
-		full_path := path.Join(state.Pwd, selected_entry.Name())
 		file, err := os.Open(full_path)
 		if err != nil {
 			return
 		}
 		defer file.Close()
-		w, h := s.Size()
-		DrawFilePreview(s, file, w/2, 0, w-1, h-1)
+		DrawFilePreview(s, file, width/2, 0, width-1, height-1)
 	}
 	state.DrawFiles(s)
 	s.Show()
@@ -86,6 +180,26 @@ func DrawFilePreview(s tcell.Screen, handle *os.File, x1, y1, x2, y2 int) {
 	if err := scanner.Err(); err != nil {
 		log.Println(err)
 	}
+}
+
+func DrawDirPreview(s tcell.Screen, full_path string, x1, y1, x2, y2 int) {
+	dir_entries, err := os.ReadDir(full_path)
+	if err != nil {
+		return
+	}
+
+	for y, entry := range dir_entries {
+		isDir := isDirEntry(path.Join(full_path, entry.Name()), entry)
+		if isDir {
+			drawText(s, x1, y, x2, y, STYLE_DIR, entry.Name()+"/")
+		} else {
+			drawText(s, x1, y, x2, y, STYLE_BG, entry.Name())
+		}
+		if y >= y2 {
+			break
+		}
+	}
+
 }
 
 func (state *State) DrawFiles(s tcell.Screen) {
@@ -141,11 +255,10 @@ func (state *State) DrawFiles(s tcell.Screen) {
 			style = STYLE_FG
 		}
 		if isDir {
+			style = style.Foreground(tcell.ColorBlue).Background(tcell.ColorBlack)
 			name += "/"
 			if state.Selected == i {
-				style = style.Foreground(tcell.ColorBlack).Background(tcell.ColorBlue)
-			} else {
-				style = style.Foreground(tcell.ColorBlue).Background(tcell.ColorBlack)
+				style = invertStyle(style)
 			}
 		}
 
@@ -153,6 +266,10 @@ func (state *State) DrawFiles(s tcell.Screen) {
 	}
 
 }
+
+//
+// input & ux
+//
 
 func (s *State) backspace(full_word bool) {
 	if len(s.Input) < 1 {
@@ -273,6 +390,10 @@ func (s *State) MoveCursor(n int) {
 	}
 }
 
+//
+// fs & search
+//
+
 func (s *State) Select() string {
 	var selected os.DirEntry
 	if len(s.Results) > 0 {
@@ -326,95 +447,11 @@ func isDirEntry(path string, entry os.DirEntry) bool {
 	return false
 }
 
-func main() {
-	s, err := tcell.NewScreen()
-	if err != nil {
-		log.Fatalf("%+v", err)
-	}
-	if err := s.Init(); err != nil {
-		log.Fatalf("%+v", err)
-	}
-	tmpFile, err := os.Create("/tmp/horselast")
-	if err != nil {
-		panic("couldnt create /tmp/horselast")
-	}
-	defer tmpFile.Close()
+//
+// helpers
+//
 
-	s.SetStyle(STYLE_BG)
-
-	s.Clear()
-
-	width, height = s.Size()
-
-	var state State
-	a, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err, "getpwd")
-	}
-	state.SwitchDir(a)
-
-	quit_on_sel := func() {
-		s.Fini()
-
-		selectedPath := state.Select()
-		if selectedPath == "" {
-			os.Exit(0)
-		}
-		fmt.Println("$EDITOR", selectedPath)
-		os.Exit(0)
-	}
-
-	quit_on_pwd := func() {
-		s.Fini()
-		fmt.Println("cd", state.Pwd)
-		os.Exit(0)
-	}
-
-	state.Redraw(s)
-
-	for {
-		s.Show()
-
-		ev := s.PollEvent()
-
-		switch ev := ev.(type) {
-		case *tcell.EventResize:
-			s.Sync()
-		case *tcell.EventKey:
-			switch ev.Key() {
-			case tcell.KeyEscape, tcell.KeyCtrlC:
-				s.Fini()
-				os.Exit(1)
-			// scrolling
-			case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
-				state.MoveCursor(1)
-			case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
-				state.MoveCursor(-1)
-			case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF:
-				shouldQuit := state.Select()
-				if shouldQuit != "" {
-					quit_on_sel()
-				}
-			case tcell.KeyEnter:
-				quit_on_pwd()
-			case tcell.KeyBackspace, tcell.KeyBackspace2, tcell.KeyCtrlB:
-				state.backspace(false)
-			case tcell.KeyCtrlW:
-				state.backspace(true)
-			case tcell.KeyCtrlE:
-				home_dir, err := os.UserHomeDir()
-				target_dir := home_dir
-				if err != nil || path.Clean(state.Pwd) == path.Clean(home_dir) {
-					target_dir = path.Clean("/")
-				}
-				target_dir = path.Clean(target_dir)
-
-				state.SwitchDir(target_dir)
-			case tcell.KeyRune:
-				state.doInput(ev.Rune())
-			}
-			state.Redraw(s)
-		}
-
-	}
+func invertStyle(st tcell.Style) tcell.Style {
+	fg, bg, _ := st.Decompose()
+	return st.Foreground(bg).Background(fg)
 }
