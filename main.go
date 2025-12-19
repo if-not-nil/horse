@@ -133,11 +133,11 @@ func main() {
 // drawing code
 //
 
-func drawText(s tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text string) {
+func drawText(scr tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text string) {
 	row := y1
 	col := x1
 	for _, r := range []rune(text) {
-		s.SetContent(col, row, r, nil, style)
+		scr.SetContent(col, row, r, nil, style)
 		col++
 		if col >= x2 {
 			row++
@@ -149,14 +149,14 @@ func drawText(s tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text string
 	}
 }
 
-func (state *State) Redraw(s tcell.Screen) {
-	s.Clear()
+func (state *State) Redraw(scr tcell.Screen) {
+	scr.Clear()
 	selected_entry := state.Files[state.Selected]
 	full_path := path.Join(state.Pwd, selected_entry.Name())
 
 	if draw_file_preview {
 		if selected_entry.IsDir() {
-			DrawDirPreview(s, full_path, width/2, 0, width-1, height-1)
+			DrawDirPreview(scr, full_path, width/2, 0, width-1, height-1)
 		} else {
 			info, err := selected_entry.Info()
 			if err != nil || info.Size() > 50*1000 { // 20kb
@@ -167,21 +167,21 @@ func (state *State) Redraw(s tcell.Screen) {
 				return
 			}
 			defer file.Close()
-			DrawFilePreview(s, file, width/2, 0, width-1, height-1)
+			DrawFilePreview(scr, file, width/2, 0, width-1, height-1)
 		}
 	}
-	state.DrawFiles(s)
-	s.Show()
+	state.DrawFiles(scr)
+	scr.Show()
 }
 
-func DrawFilePreview(s tcell.Screen, handle *os.File, x1, y1, x2, y2 int) {
+func DrawFilePreview(scr tcell.Screen, handle *os.File, x1, y1, x2, y2 int) {
 	// TODO: use "github.com/alecthomas/chroma/v2/quick" to highlight the preview file
 	scanner := bufio.NewScanner(handle)
 	scanner.Buffer(make([]byte, 1024), 1024*1024)
 
 	y := y1
 	for scanner.Scan() && y <= y2 {
-		drawText(s, x1, y, x2, y, STYLE_BG, scanner.Text())
+		drawText(scr, x1, y, x2, y, STYLE_BG, scanner.Text())
 		y++
 	}
 
@@ -190,7 +190,7 @@ func DrawFilePreview(s tcell.Screen, handle *os.File, x1, y1, x2, y2 int) {
 	}
 }
 
-func DrawDirPreview(s tcell.Screen, full_path string, x1, y1, x2, y2 int) {
+func DrawDirPreview(scr tcell.Screen, full_path string, x1, y1, x2, y2 int) {
 	dir_entries, err := os.ReadDir(full_path)
 	if err != nil {
 		return
@@ -199,9 +199,9 @@ func DrawDirPreview(s tcell.Screen, full_path string, x1, y1, x2, y2 int) {
 	for y, entry := range dir_entries {
 		isDir := isDirEntry(path.Join(full_path, entry.Name()), entry)
 		if isDir {
-			drawText(s, x1, y, x2, y, STYLE_DIR, entry.Name()+"/")
+			drawText(scr, x1, y, x2, y, STYLE_DIR, entry.Name()+"/")
 		} else {
-			drawText(s, x1, y, x2, y, STYLE_BG, entry.Name())
+			drawText(scr, x1, y, x2, y, STYLE_BG, entry.Name())
 		}
 		if y >= y2 {
 			break
@@ -210,24 +210,24 @@ func DrawDirPreview(s tcell.Screen, full_path string, x1, y1, x2, y2 int) {
 
 }
 
-func (state *State) DrawFiles(s tcell.Screen) {
+func (state *State) DrawFiles(scr tcell.Screen) {
 	filesToShow := state.CurrentList()
 
 	pwdLen := len(state.Pwd) + 1
-	drawText(s, 1, 1, pwdLen, 1, STYLE_BG, state.Pwd)
+	drawText(scr, 1, 1, pwdLen, 1, STYLE_BG, state.Pwd)
 
 	if len(filesToShow) > 0 && state.Selected < len(filesToShow) {
-		drawText(s, pwdLen, 1, 999, 1, STYLE_MID, filesToShow[state.Selected])
+		drawText(scr, pwdLen, 1, 999, 1, STYLE_MID, filesToShow[state.Selected])
 	}
 
-	drawText(s, pwdLen, 1, 999, 1, STYLE_BG, state.Input)
+	drawText(scr, pwdLen, 1, 999, 1, STYLE_BG, state.Input)
 
 	scrollInfo := fmt.Sprintf("[%d/%d]", state.Selected+1, len(filesToShow))
-	drawText(s, width-len(scrollInfo)-2, 1, 999, 1, STYLE_MID, scrollInfo)
+	drawText(scr, width-len(scrollInfo)-2, 1, 999, 1, STYLE_MID, scrollInfo)
 
 	if len(filesToShow) == 0 {
-		drawText(s, 1, 3, 999, 3, STYLE_MID, "(empty)")
-		s.Show()
+		drawText(scr, 1, 3, 999, 3, STYLE_MID, "(empty)")
+		scr.Show()
 		return
 	}
 
@@ -270,7 +270,7 @@ func (state *State) DrawFiles(s tcell.Screen) {
 			}
 		}
 
-		drawText(s, 1, y, 999, y, style, name)
+		drawText(scr, 1, y, 999, y, style, name)
 	}
 
 }
