@@ -52,7 +52,6 @@ func drawText(s tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text string
 
 func (state *State) Redraw(s tcell.Screen) {
 	s.Clear()
-	state.DrawFiles(s)
 	selected_entry := state.Files[state.Selected]
 
 	if !selected_entry.IsDir() {
@@ -69,6 +68,7 @@ func (state *State) Redraw(s tcell.Screen) {
 		w, h := s.Size()
 		DrawFilePreview(s, file, w/2, 0, w-1, h-1)
 	}
+	state.DrawFiles(s)
 	s.Show()
 }
 
