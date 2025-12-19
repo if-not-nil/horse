@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -14,12 +15,13 @@ import (
 )
 
 var (
-	width     = 20
-	height    = 20
-	STYLE_BG  = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
-	STYLE_DIR = tcell.StyleDefault.Background(tcell.ColorBlack).Foreground(tcell.ColorBlue)
-	STYLE_FG  = tcell.StyleDefault.Background(tcell.ColorWhite).Foreground(tcell.ColorBlack)
-	STYLE_MID = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
+	width             = 20
+	height            = 20
+	STYLE_BG          = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
+	STYLE_DIR         = tcell.StyleDefault.Background(tcell.ColorBlack).Foreground(tcell.ColorBlue)
+	STYLE_FG          = tcell.StyleDefault.Background(tcell.ColorWhite).Foreground(tcell.ColorBlack)
+	STYLE_MID         = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
+	draw_file_preview = false
 )
 
 type State struct {
@@ -32,6 +34,10 @@ type State struct {
 }
 
 func main() {
+	flag.BoolVar(&draw_file_preview, "preview", true, "show a file preview on the right side")
+	flag.BoolVar(&draw_file_preview, "p", true, "alias for -preview")
+	flag.Parse()
+
 	s, err := tcell.NewScreen()
 	if err != nil {
 		log.Fatalf("%+v", err)
@@ -148,19 +154,21 @@ func (state *State) Redraw(s tcell.Screen) {
 	selected_entry := state.Files[state.Selected]
 	full_path := path.Join(state.Pwd, selected_entry.Name())
 
-	if selected_entry.IsDir() {
-		DrawDirPreview(s, full_path, width/2, 0, width-1, height-1)
-	} else {
-		info, err := selected_entry.Info()
-		if err != nil || info.Size() > 50*1000 { // 20kb
-			return
+	if draw_file_preview {
+		if selected_entry.IsDir() {
+			DrawDirPreview(s, full_path, width/2, 0, width-1, height-1)
+		} else {
+			info, err := selected_entry.Info()
+			if err != nil || info.Size() > 50*1000 { // 20kb
+				return
+			}
+			file, err := os.Open(full_path)
+			if err != nil {
+				return
+			}
+			defer file.Close()
+			DrawFilePreview(s, file, width/2, 0, width-1, height-1)
 		}
-		file, err := os.Open(full_path)
-		if err != nil {
-			return
-		}
-		defer file.Close()
-		DrawFilePreview(s, file, width/2, 0, width-1, height-1)
 	}
 	state.DrawFiles(s)
 	s.Show()
@@ -304,6 +312,9 @@ func (s *State) doInput(what rune) {
 	modified := fmt.Sprint(s.Input, string(what))
 	results := s.search(modified)
 	if len(results) == 0 {
+		if len(s.Results) < 1 {
+			return
+		}
 		length := len(s.Input)
 		s.Input = s.Results[0].Name()[:length]
 		return

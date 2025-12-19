@@ -51,6 +51,13 @@ Backspace:
     erase a character or go back a directory
 ```
 
+** flags **
+```
+  -p	alias for -preview (default true)
+  -preview
+    	show a file preview on the right side (default true)
+```
+
 **plans**
 
 - [ ] (C-h or C-b), (C-l or C-f) is up and down direcectories
