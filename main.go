@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -14,16 +13,21 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/lithammer/fuzzysearch/fuzzy"
+
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 )
 
 var (
-	width             = 20
-	height            = 20
-	STYLE_BG          = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
-	STYLE_DIR         = tcell.StyleDefault.Background(tcell.ColorBlack).Foreground(tcell.ColorBlue)
-	STYLE_FG          = tcell.StyleDefault.Background(tcell.ColorWhite).Foreground(tcell.ColorBlack)
-	STYLE_MID         = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
-	draw_file_preview = false
+	width                           = 20
+	height                          = 20
+	STYLE_BG                        = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
+	STYLE_DIR                       = tcell.StyleDefault.Background(tcell.ColorBlack).Foreground(tcell.ColorBlue)
+	STYLE_FG                        = tcell.StyleDefault.Background(tcell.ColorWhite).Foreground(tcell.ColorBlack)
+	STYLE_MID                       = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
+	draw_file_preview               = false
+	HL_STYLE          *chroma.Style = styles.Get("monokai")
 )
 
 type State struct {
@@ -196,24 +200,53 @@ func (state *State) Redraw(scr tcell.Screen) {
 }
 
 func DrawFilePreview(scr tcell.Screen, handle *os.File, x1, y1, x2, y2 int) {
-	// TODO: use "github.com/alecthomas/chroma/v2/quick" to highlight the preview file
-	const maxPreviewSize = 100 * 1024 // 100 KB
-	const maxPreviewLines = 1000
-
-	limitedReader := io.LimitReader(handle, maxPreviewSize)
-	scanner := bufio.NewScanner(limitedReader)
-	scanner.Buffer(make([]byte, 1024), 1024*1024)
-
-	y := y1
-	lineCount := 0
-	for scanner.Scan() && y <= y2 && lineCount < maxPreviewLines {
-		drawText(scr, x1, y, x2, y, STYLE_BG, scanner.Text())
-		y++
-		lineCount++
+	content, err := io.ReadAll(io.LimitReader(handle, 10000)) // 10KB limit is fast
+	if err != nil {
+		return
 	}
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("File preview error: %v", err)
+	lexer := lexers.Match(handle.Name())
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	style := HL_STYLE
+	if style == nil {
+		style = styles.Fallback
+	}
+
+	iterator, err := lexer.Tokenise(nil, string(content))
+	if err != nil {
+		return
+	}
+
+	x, y := x1, y1
+	for _, token := range iterator.Tokens() {
+		entry := style.Get(token.Type)
+
+		tcellStyle := tcell.StyleDefault.
+			// they map directly
+			Foreground(tcell.NewRGBColor(int32(entry.Colour.Red()), int32(entry.Colour.Green()), int32(entry.Colour.Blue()))).
+			Background(tcell.ColorReset)
+
+		if entry.Bold == chroma.Yes {
+			tcellStyle = tcellStyle.Bold(true)
+		}
+
+		// draw each token now
+		for _, r := range token.Value {
+			if r == '\n' {
+				x = x1
+				y++
+				if y > y2 {
+					return
+				}
+				continue
+			}
+			if x <= x2 {
+				scr.SetContent(x, y, r, nil, tcellStyle)
+				x++
+			}
+		}
 	}
 }
 
@@ -441,24 +474,24 @@ func (s *State) MoveCursor(n int) {
 //
 
 func (s *State) Select() string {
-    var list []os.DirEntry
-    if len(s.Results) > 0 {
-        list = s.Results
-    } else {
-        list = s.Files
-    }
+	var list []os.DirEntry
+	if len(s.Results) > 0 {
+		list = s.Results
+	} else {
+		list = s.Files
+	}
 
-    if len(list) == 0 {
-        return ""
-    }
+	if len(list) == 0 {
+		return ""
+	}
 
-    selected := list[s.Selected]
+	selected := list[s.Selected]
 
-    if isDirEntry(path.Join(s.Pwd, selected.Name()), selected) {
-        s.SwitchDir(path.Join(s.Pwd, selected.Name()))
-        return ""
-    }
-    return path.Join(s.Pwd, selected.Name())
+	if isDirEntry(path.Join(s.Pwd, selected.Name()), selected) {
+		s.SwitchDir(path.Join(s.Pwd, selected.Name()))
+		return ""
+	}
+	return path.Join(s.Pwd, selected.Name())
 }
 
 func (s *State) SwitchDir(where string) error {
