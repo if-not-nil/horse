@@ -5,9 +5,11 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -176,17 +178,23 @@ func (state *State) Redraw(scr tcell.Screen) {
 
 func DrawFilePreview(scr tcell.Screen, handle *os.File, x1, y1, x2, y2 int) {
 	// TODO: use "github.com/alecthomas/chroma/v2/quick" to highlight the preview file
-	scanner := bufio.NewScanner(handle)
+	const maxPreviewSize = 100 * 1024 // 100 KB
+	const maxPreviewLines = 1000
+
+	limitedReader := io.LimitReader(handle, maxPreviewSize)
+	scanner := bufio.NewScanner(limitedReader)
 	scanner.Buffer(make([]byte, 1024), 1024*1024)
 
 	y := y1
-	for scanner.Scan() && y <= y2 {
+	lineCount := 0
+	for scanner.Scan() && y <= y2 && lineCount < maxPreviewLines {
 		drawText(scr, x1, y, x2, y, STYLE_BG, scanner.Text())
 		y++
+		lineCount++
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Println(err)
+		log.Printf("File preview error: %v", err)
 	}
 }
 
@@ -207,7 +215,6 @@ func DrawDirPreview(scr tcell.Screen, full_path string, x1, y1, x2, y2 int) {
 			break
 		}
 	}
-
 }
 
 func (state *State) DrawFiles(scr tcell.Screen) {
@@ -272,7 +279,6 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 
 		drawText(scr, 1, y, 999, y, style, name)
 	}
-
 }
 
 //
@@ -309,16 +315,19 @@ func (s *State) backspace(full_word bool) {
 }
 
 func (s *State) doInput(what rune) {
-	modified := fmt.Sprint(s.Input, string(what))
-	results := s.search(modified)
-	if len(results) == 0 {
-		if len(s.Results) < 1 {
-			return
-		}
-		length := len(s.Input)
-		s.Input = s.Results[0].Name()[:length]
+	const maxInputLength = 100
+
+	if len(s.Input) >= maxInputLength {
 		return
 	}
+
+	modified := s.Input + string(what)
+	results := s.search(modified)
+
+	if len(results) == 0 {
+		return
+	}
+
 	s.Input = modified
 	s.Results = results
 	s.Selected = 0
@@ -326,43 +335,42 @@ func (s *State) doInput(what rune) {
 }
 
 func (s *State) search(query string) []os.DirEntry {
-	if query == "" {
-		return nil
-	}
+    if query == "" {
+        return nil
+    }
 
-	var exact, prefix, fuzzyMatches []os.DirEntry
+    var matches []os.DirEntry
+    queryLower := strings.ToLower(query)
 
-	// prefix and exact matches first
-	for _, f := range s.Files {
-		name := f.Name()
-		switch {
-		case name == query:
-			exact = append(exact, f)
-		case strings.HasPrefix(name, query):
-			prefix = append(prefix, f)
-		default:
-			fuzzyMatches = append(fuzzyMatches, f)
-		}
-	}
+    for _, f := range s.Files {
+        name := f.Name()
+        nameLower := strings.ToLower(name)
 
-	// fuzzy matches on the rest
-	names := make([]string, len(fuzzyMatches))
-	for i, f := range fuzzyMatches {
-		names[i] = f.Name()
-	}
+        if strings.Contains(nameLower, queryLower) || fuzzy.MatchFold(query, name) {
+            matches = append(matches, f)
+        }
+    }
 
-	matchedNames := fuzzy.FindFold(query, names)
-	var fuzzyRanked []os.DirEntry
-	for _, name := range matchedNames {
-		for _, f := range fuzzyMatches {
-			if f.Name() == name {
-				fuzzyRanked = append(fuzzyRanked, f)
-				break
-			}
-		}
-	}
+    sort.Slice(matches, func(i, j int) bool {
+        iName := strings.ToLower(matches[i].Name())
+        jName := strings.ToLower(matches[j].Name())
 
-	return append(append(exact, prefix...), fuzzyRanked...)
+        if iName == queryLower { return true }
+        if jName == queryLower { return false }
+
+        iHasPrefix := strings.HasPrefix(iName, queryLower)
+        jHasPrefix := strings.HasPrefix(jName, queryLower)
+        if iHasPrefix && !jHasPrefix { return true }
+        if !iHasPrefix && jHasPrefix { return false }
+
+        if len(iName) != len(jName) {
+            return len(iName) < len(jName)
+        }
+
+        return iName < jName
+    })
+
+    return matches
 }
 
 func (s *State) CurrentList() []string {
@@ -420,22 +428,29 @@ func (s *State) Select() string {
 	return path.Join(s.Pwd, selected.Name())
 }
 
-func (s *State) SwitchDir(where string) {
-	if path.IsAbs(where) {
-		s.Pwd = fmt.Sprint(path.Clean(where), "/")
-	} else {
-		log.Fatalf("called switch with a relative path")
+func (s *State) SwitchDir(where string) error {
+	if where == "" {
+		return fmt.Errorf("cannot switch to empty directory")
 	}
+
+	cleanPath := path.Clean(where)
+	if !path.IsAbs(cleanPath) {
+		return fmt.Errorf("must provide an absolute path")
+	}
+
+	s.Pwd = cleanPath + "/"
+
 	s.Input = ""
+	s.Selected = 0
+	s.Results = nil
 
 	files, err := os.ReadDir(s.Pwd)
 	if err != nil {
-		log.Fatalln(err, "listdir")
+		return fmt.Errorf("failed to read directory %s: %w", s.Pwd, err)
 	}
-	s.Files = files
 
-	s.Selected = 0
-	s.Results = nil
+	s.Files = files
+	return nil
 }
 
 // makes sure symlinks to directories work right
