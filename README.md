@@ -1,6 +1,4 @@
-# horse
-
-<img width="367" height="190" alt="image" src="https://github.com/user-attachments/assets/de70b9d1-6810-4834-8eb2-68369b8c5427" />
+# `horse
 
 ```
             .''   generic filepicker with a focus on ergonomics, inspired by zellij's
@@ -11,8 +9,9 @@
    `   \     \
 ```
 
+<img width="1279" height="558" alt="image" src="https://github.com/user-attachments/assets/af82c907-1e1f-48c1-90df-8121f65216e0" />
 
-** how to use **
+**`how to use**
 
 ```bash
 go install github.com/if-not-nil/horse@latest
@@ -30,7 +29,7 @@ alias h='eval "$(horse)"'
 - try doing `Down`, `Up`, `<C-n>`, `<C-p>`, `<C-j>`, `<C-k>`
 - try doing `<C-c>` and see how its different from `Enter`
 
-** keymap **
+**`keymap**
 
 ```
 Escape, <C-C>:
@@ -53,14 +52,14 @@ Backspace:
     erase a character or go back a directory
 ```
 
-** flags **
+**`flags**
 ```
   -p	alias for -preview (default true)
   -preview
     	show a file preview on the right side (default true)
 ```
 
-**plans**
+**`plans**
 
 - [ ] (C-h or C-b), (C-l or C-f) is up and down direcectories
 - [ ] C-s copies the selected item's path
