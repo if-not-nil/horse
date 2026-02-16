@@ -43,10 +43,12 @@ C-w:
     delete word
 C-e:
     go to `~` or `/`
+C-a:
+    bring up a prompt for creating files/directories (try qwer/asdf/zx)
 Tab:
     select an entry. if a file, open, if a directory, enter
 Enter:
-    cd to current directory
+    cd to current/selected directory
 Backspace:
     erase a character or go back a directory
 ```

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -37,6 +38,41 @@ type State struct {
 	Results  []os.DirEntry
 	Selected int
 	TopIndex int
+
+	ActivePrompt Prompt
+}
+
+type Prompt struct {
+	IsActive bool
+	Label    string
+	Input    string
+	OnSubmit func(string)
+}
+
+func (s *State) OpenPrompt(label string, onSubmit func(string)) {
+	s.ActivePrompt = Prompt{
+		IsActive: true,
+		Label:    label,
+		Input:    "",
+		OnSubmit: onSubmit,
+	}
+}
+
+func (s *State) HandlePromptInput(ev *tcell.EventKey) {
+	switch ev.Key() {
+	case tcell.KeyEnter:
+		s.ActivePrompt.OnSubmit(s.ActivePrompt.Input)
+		s.ActivePrompt.IsActive = false
+		s.SwitchDir(s.Pwd)
+	case tcell.KeyEscape:
+		s.ActivePrompt.IsActive = false
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if len(s.ActivePrompt.Input) > 0 {
+			s.ActivePrompt.Input = s.ActivePrompt.Input[:len(s.ActivePrompt.Input)-1]
+		}
+	case tcell.KeyRune:
+		s.ActivePrompt.Input += string(ev.Rune())
+	}
 }
 
 func main() {
@@ -102,7 +138,38 @@ func main() {
 		case *tcell.EventResize:
 			s.Sync()
 		case *tcell.EventKey:
+
+			if state.ActivePrompt.IsActive {
+				state.HandlePromptInput(ev)
+				state.Redraw(s)
+				continue
+			}
 			switch ev.Key() {
+
+			case tcell.KeyCtrlA:
+				state.OpenPrompt("create: ", func(name string) {
+					if name == "" {
+						return
+					}
+
+					fullPath := path.Join(state.Pwd, name)
+
+					last_dir := fullPath
+					if strings.HasSuffix(name, "/") {
+						os.MkdirAll(fullPath, 0o755)
+					} else {
+						dir := filepath.Dir(fullPath)
+
+						os.MkdirAll(dir, 0o755)
+						last_dir = dir
+
+						f, err := os.Create(fullPath)
+						if err == nil {
+							f.Close()
+						}
+					}
+					state.SwitchDir(last_dir)
+				})
 			case tcell.KeyEscape, tcell.KeyCtrlC:
 				s.Fini()
 				os.Exit(1)
@@ -330,6 +397,35 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 		}
 
 		drawText(scr, 1, y, 999, y, style, name)
+	}
+
+	if state.ActivePrompt.IsActive {
+		input := state.ActivePrompt.Input
+		label := state.ActivePrompt.Label
+
+		for i := 0; i < width; i++ {
+			scr.SetContent(i, 1, ' ', nil, STYLE_BG)
+		}
+
+		drawText(scr, 1, 1, len(label), 1, STYLE_FG, label)
+
+		lastSlash := strings.LastIndex(input, "/")
+
+		currentX := len(label) + 1
+
+		if lastSlash != -1 {
+			dirPart := input[:lastSlash+1]
+			filePart := input[lastSlash+1:]
+
+			styleDir := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorBlue)
+			drawText(scr, currentX, 1, currentX+len(dirPart), 1, styleDir, dirPart)
+
+			if filePart != "" {
+				drawText(scr, currentX+len(dirPart), 1, width-1, 1, STYLE_BG, filePart)
+			}
+		} else {
+			drawText(scr, currentX, 1, width-1, 1, STYLE_BG, input)
+		}
 	}
 }
 
