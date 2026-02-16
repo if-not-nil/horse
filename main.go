@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -29,6 +30,7 @@ var (
 	STYLE_MID                       = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
 	draw_file_preview               = false
 	HL_STYLE          *chroma.Style = styles.Get("monokai")
+	screen            tcell.Screen
 )
 
 type State struct {
@@ -64,6 +66,7 @@ func (s *State) HandlePromptInput(ev *tcell.EventKey) {
 		s.ActivePrompt.OnSubmit(s.ActivePrompt.Input)
 		s.ActivePrompt.IsActive = false
 		s.SwitchDir(s.Pwd)
+		screen.HideCursor()
 	case tcell.KeyEscape:
 		s.ActivePrompt.IsActive = false
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
@@ -84,19 +87,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("%+v", err)
 	}
-	if err := s.Init(); err != nil {
+	screen = s
+	if err := screen.Init(); err != nil {
 		log.Fatalf("%+v", err)
 	}
-	width, height = s.Size()
+	width, height = screen.Size()
 	tmpFile, err := os.Create("/tmp/horselast")
 	if err != nil {
 		panic("couldnt create /tmp/horselast")
 	}
 	defer tmpFile.Close()
 
-	s.SetStyle(STYLE_BG)
+	screen.SetStyle(STYLE_BG)
 
-	s.Clear()
+	screen.Clear()
 
 	var state State
 	a, err := os.Getwd()
@@ -106,7 +110,7 @@ func main() {
 	state.SwitchDir(a)
 
 	quit_on_sel := func() {
-		s.Fini()
+		screen.Fini()
 
 		selectedPath := state.Select()
 		if selectedPath == "" {
@@ -117,7 +121,7 @@ func main() {
 	}
 
 	quit_on_pwd := func() {
-		s.Fini()
+		screen.Fini()
 		if state.Input == "" {
 			fmt.Println("cd", state.Pwd)
 		} else {
@@ -127,24 +131,59 @@ func main() {
 		os.Exit(0)
 	}
 
-	state.Redraw(s)
+	state.Redraw()
 
 	for {
-		s.Show()
+		screen.Show()
 
-		ev := s.PollEvent()
+		ev := screen.PollEvent()
 
 		switch ev := ev.(type) {
 		case *tcell.EventResize:
-			s.Sync()
+			screen.Sync()
 		case *tcell.EventKey:
 
 			if state.ActivePrompt.IsActive {
 				state.HandlePromptInput(ev)
-				state.Redraw(s)
+				state.Redraw()
 				continue
 			}
 			switch ev.Key() {
+
+			case tcell.KeyCtrlO:
+				var selectedEntry os.DirEntry
+				if len(state.Results) > 0 {
+					selectedEntry = state.Results[state.Selected]
+				} else if len(state.Files) > 0 {
+					selectedEntry = state.Files[state.Selected]
+				} else {
+					continue
+				}
+
+				p := path.Join(state.Pwd, selectedEntry.Name())
+
+				screen.Fini()
+				switch runtime.GOOS {
+				case "linux":
+					fmt.Printf("xdg-open %s\n", p)
+				case "darwin":
+					fmt.Printf("open %s\n", p)
+				default:
+					fmt.Println("echo dont know how to open a file on your OS! pls submit an issue if you do, it should be simple")
+				}
+
+				os.Exit(0)
+
+			case tcell.KeyCtrlD:
+				selected := state.Files[state.Selected].Name()
+				fullPath := path.Join(state.Pwd, selected)
+
+				state.OpenPrompt("delete "+selected+"? (y/n): ", func(input string) {
+					if strings.ToLower(input) == "y" {
+						os.RemoveAll(fullPath)
+						state.SwitchDir(state.Pwd)
+					}
+				})
 
 			case tcell.KeyCtrlA:
 				state.OpenPrompt("create: ", func(name string) {
@@ -171,8 +210,8 @@ func main() {
 					state.SwitchDir(last_dir)
 				})
 			case tcell.KeyEscape, tcell.KeyCtrlC:
-				s.Fini()
-				os.Exit(1)
+				screen.Fini()
+				os.Exit(0)
 			// scrolling
 			case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
 				state.MoveCursor(1)
@@ -201,7 +240,7 @@ func main() {
 			case tcell.KeyRune:
 				state.doInput(ev.Rune())
 			}
-			state.Redraw(s)
+			state.Redraw()
 		}
 
 	}
@@ -211,11 +250,11 @@ func main() {
 // drawing code
 //
 
-func drawText(scr tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text string) {
+func drawText(x1, y1, x2, y2 int, style tcell.Style, text string) {
 	row := y1
 	col := x1
 	for _, r := range []rune(text) {
-		scr.SetContent(col, row, r, nil, style)
+		screen.SetContent(col, row, r, nil, style)
 		col++
 		if col >= x2 {
 			row++
@@ -227,8 +266,8 @@ func drawText(scr tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text stri
 	}
 }
 
-func (state *State) Redraw(scr tcell.Screen) {
-	scr.Clear()
+func (state *State) Redraw() {
+	screen.Clear()
 
 	files := state.Files
 	if len(state.Results) > 0 {
@@ -236,8 +275,8 @@ func (state *State) Redraw(scr tcell.Screen) {
 	}
 
 	if len(files) == 0 {
-		state.DrawFiles(scr)
-		scr.Show()
+		state.DrawFiles(screen)
+		screen.Show()
 		return
 	}
 
@@ -246,24 +285,24 @@ func (state *State) Redraw(scr tcell.Screen) {
 
 	if draw_file_preview {
 		if selected_entry.IsDir() {
-			DrawDirPreview(scr, full_path, width/2, 0, width-1, height-1)
+			DrawDirPreview(screen, full_path, width/2, 0, width-1, height-1)
 		} else {
 			info, err := selected_entry.Info()
 			if err != nil || info.Size() > 50*1000 {
-				state.DrawFiles(scr)
+				state.DrawFiles(screen)
 				return
 			}
 			file, err := os.Open(full_path)
 			if err != nil {
-				state.DrawFiles(scr)
+				state.DrawFiles(screen)
 				return
 			}
 			defer file.Close()
-			DrawFilePreview(scr, file, width/2, 0, width-1, height-1)
+			DrawFilePreview(screen, file, width/2, 0, width-1, height-1)
 		}
 	}
-	state.DrawFiles(scr)
-	scr.Show()
+	state.DrawFiles(screen)
+	screen.Show()
 }
 
 func DrawFilePreview(scr tcell.Screen, handle *os.File, x1, y1, x2, y2 int) {
@@ -326,9 +365,9 @@ func DrawDirPreview(scr tcell.Screen, full_path string, x1, y1, x2, y2 int) {
 	for y, entry := range dir_entries {
 		isDir := isDirEntry(path.Join(full_path, entry.Name()), entry)
 		if isDir {
-			drawText(scr, x1, y, x2, y, STYLE_DIR, entry.Name()+"/")
+			drawText(x1, y, x2, y, STYLE_DIR, entry.Name()+"/")
 		} else {
-			drawText(scr, x1, y, x2, y, STYLE_BG, entry.Name())
+			drawText(x1, y, x2, y, STYLE_BG, entry.Name())
 		}
 		if y >= y2 {
 			break
@@ -340,19 +379,19 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 	filesToShow := state.CurrentList()
 
 	pwdLen := len(state.Pwd) + 1
-	drawText(scr, 1, 1, pwdLen, 1, STYLE_BG, state.Pwd)
+	drawText(1, 1, pwdLen, 1, STYLE_BG, state.Pwd)
 
 	if len(filesToShow) > 0 && state.Selected < len(filesToShow) {
-		drawText(scr, pwdLen, 1, 999, 1, STYLE_MID, filesToShow[state.Selected])
+		drawText(pwdLen, 1, 999, 1, STYLE_MID, filesToShow[state.Selected])
 	}
 
-	drawText(scr, pwdLen, 1, 999, 1, STYLE_BG, state.Input)
+	drawText(pwdLen, 1, 999, 1, STYLE_BG, state.Input)
 
 	scrollInfo := fmt.Sprintf("[%d/%d]", state.Selected+1, len(filesToShow))
-	drawText(scr, width-len(scrollInfo)-2, 1, 999, 1, STYLE_MID, scrollInfo)
+	drawText(width-len(scrollInfo)-2, 1, 999, 1, STYLE_MID, scrollInfo)
 
 	if len(filesToShow) == 0 {
-		drawText(scr, 1, 2, 999, 3, STYLE_MID, "*nothing here*")
+		drawText(1, 2, 999, 3, STYLE_MID, "*nothing here*")
 		scr.Show()
 		return
 	}
@@ -396,7 +435,7 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 			}
 		}
 
-		drawText(scr, 1, y, 999, y, style, name)
+		drawText(1, y, 999, y, style, name)
 	}
 
 	if state.ActivePrompt.IsActive {
@@ -407,7 +446,7 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 			scr.SetContent(i, 1, ' ', nil, STYLE_BG)
 		}
 
-		drawText(scr, 1, 1, len(label), 1, STYLE_FG, label)
+		drawText(1, 1, len(label), 1, STYLE_FG, label)
 
 		lastSlash := strings.LastIndex(input, "/")
 
@@ -418,14 +457,15 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 			filePart := input[lastSlash+1:]
 
 			styleDir := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorBlue)
-			drawText(scr, currentX, 1, currentX+len(dirPart), 1, styleDir, dirPart)
+			drawText(currentX, 1, currentX+len(dirPart), 1, styleDir, dirPart)
 
 			if filePart != "" {
-				drawText(scr, currentX+len(dirPart), 1, width-1, 1, STYLE_BG, filePart)
+				drawText(currentX+len(dirPart), 1, width-1, 1, STYLE_BG, filePart)
 			}
 		} else {
-			drawText(scr, currentX, 1, width-1, 1, STYLE_BG, input)
+			drawText(currentX, 1, width-1, 1, STYLE_BG, input)
 		}
+		scr.ShowCursor(len(label)+len(input)+1, 1)
 	}
 }
 
