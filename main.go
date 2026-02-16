@@ -158,7 +158,19 @@ func drawText(scr tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text stri
 
 func (state *State) Redraw(scr tcell.Screen) {
 	scr.Clear()
-	selected_entry := state.Files[state.Selected]
+
+	files := state.Files
+	if len(state.Results) > 0 {
+		files = state.Results
+	}
+
+	if len(files) == 0 {
+		state.DrawFiles(scr)
+		scr.Show()
+		return
+	}
+
+	selected_entry := files[state.Selected]
 	full_path := path.Join(state.Pwd, selected_entry.Name())
 
 	if draw_file_preview {
@@ -166,11 +178,13 @@ func (state *State) Redraw(scr tcell.Screen) {
 			DrawDirPreview(scr, full_path, width/2, 0, width-1, height-1)
 		} else {
 			info, err := selected_entry.Info()
-			if err != nil || info.Size() > 50*1000 { // 20kb
+			if err != nil || info.Size() > 50*1000 {
+				state.DrawFiles(scr)
 				return
 			}
 			file, err := os.Open(full_path)
 			if err != nil {
+				state.DrawFiles(scr)
 				return
 			}
 			defer file.Close()
@@ -238,7 +252,7 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 	drawText(scr, width-len(scrollInfo)-2, 1, 999, 1, STYLE_MID, scrollInfo)
 
 	if len(filesToShow) == 0 {
-		drawText(scr, 1, 3, 999, 3, STYLE_MID, "(empty)")
+		drawText(scr, 1, 2, 999, 3, STYLE_MID, "*nothing here*")
 		scr.Show()
 		return
 	}
@@ -340,42 +354,50 @@ func (s *State) doInput(what rune) {
 }
 
 func (s *State) search(query string) []os.DirEntry {
-    if query == "" {
-        return nil
-    }
+	if query == "" {
+		return nil
+	}
 
-    var matches []os.DirEntry
-    queryLower := strings.ToLower(query)
+	var matches []os.DirEntry
+	queryLower := strings.ToLower(query)
 
-    for _, f := range s.Files {
-        name := f.Name()
-        nameLower := strings.ToLower(name)
+	for _, f := range s.Files {
+		name := f.Name()
+		nameLower := strings.ToLower(name)
 
-        if strings.Contains(nameLower, queryLower) || fuzzy.MatchFold(query, name) {
-            matches = append(matches, f)
-        }
-    }
+		if strings.Contains(nameLower, queryLower) || fuzzy.MatchFold(query, name) {
+			matches = append(matches, f)
+		}
+	}
 
-    sort.Slice(matches, func(i, j int) bool {
-        iName := strings.ToLower(matches[i].Name())
-        jName := strings.ToLower(matches[j].Name())
+	sort.Slice(matches, func(i, j int) bool {
+		iName := strings.ToLower(matches[i].Name())
+		jName := strings.ToLower(matches[j].Name())
 
-        if iName == queryLower { return true }
-        if jName == queryLower { return false }
+		if iName == queryLower {
+			return true
+		}
+		if jName == queryLower {
+			return false
+		}
 
-        iHasPrefix := strings.HasPrefix(iName, queryLower)
-        jHasPrefix := strings.HasPrefix(jName, queryLower)
-        if iHasPrefix && !jHasPrefix { return true }
-        if !iHasPrefix && jHasPrefix { return false }
+		iHasPrefix := strings.HasPrefix(iName, queryLower)
+		jHasPrefix := strings.HasPrefix(jName, queryLower)
+		if iHasPrefix && !jHasPrefix {
+			return true
+		}
+		if !iHasPrefix && jHasPrefix {
+			return false
+		}
 
-        if len(iName) != len(jName) {
-            return len(iName) < len(jName)
-        }
+		if len(iName) != len(jName) {
+			return len(iName) < len(jName)
+		}
 
-        return iName < jName
-    })
+		return iName < jName
+	})
 
-    return matches
+	return matches
 }
 
 func (s *State) CurrentList() []string {
@@ -419,18 +441,24 @@ func (s *State) MoveCursor(n int) {
 //
 
 func (s *State) Select() string {
-	var selected os.DirEntry
-	if len(s.Results) > 0 {
-		selected = s.Results[s.Selected]
-	} else {
-		selected = s.Files[s.Selected]
-	}
+    var list []os.DirEntry
+    if len(s.Results) > 0 {
+        list = s.Results
+    } else {
+        list = s.Files
+    }
 
-	if isDirEntry(path.Join(s.Pwd, selected.Name()), selected) {
-		s.SwitchDir(path.Join(s.Pwd, selected.Name()))
-		return ""
-	}
-	return path.Join(s.Pwd, selected.Name())
+    if len(list) == 0 {
+        return ""
+    }
+
+    selected := list[s.Selected]
+
+    if isDirEntry(path.Join(s.Pwd, selected.Name()), selected) {
+        s.SwitchDir(path.Join(s.Pwd, selected.Name()))
+        return ""
+    }
+    return path.Join(s.Pwd, selected.Name())
 }
 
 func (s *State) SwitchDir(where string) error {
