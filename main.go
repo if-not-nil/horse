@@ -78,7 +78,12 @@ func main() {
 
 	quit_on_pwd := func() {
 		s.Fini()
-		fmt.Println("cd", state.Pwd)
+		if state.Input == "" {
+			fmt.Println("cd", state.Pwd)
+		} else {
+			p := path.Join(state.Pwd, state.Files[state.Selected].Name())
+			fmt.Println("cd", p)
+		}
 		os.Exit(0)
 	}
 
