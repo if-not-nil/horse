@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http" // todo: another library for filetypes
 	"os"
 	"os/exec"
 	"path"
@@ -279,7 +280,7 @@ func (state *State) Redraw() {
 	}
 
 	if len(files) == 0 {
-		state.DrawFiles(screen)
+		state.DrawFiles()
 		screen.Show()
 		return
 	}
@@ -288,28 +289,51 @@ func (state *State) Redraw() {
 	full_path := path.Join(state.Pwd, selected_entry.Name())
 
 	if draw_file_preview {
-		if selected_entry.IsDir() {
-			DrawDirPreview(screen, full_path, width/2, 0, width-1, height-1)
-		} else {
+		if !selected_entry.IsDir() {
 			info, err := selected_entry.Info()
+			draw_warning := func(text string) {
+				drawText(width/2+2, 2, width-1, 2, STYLE_MID, text)
+			}
+
+			// dont do for 50kB+
 			if err != nil || info.Size() > 50*1000 {
-				state.DrawFiles(screen)
+				state.DrawFiles()
+				draw_warning("*file too large (or cant be opened)*")
 				return
 			}
+			if info.Size() == 0 {
+				state.DrawFiles()
+				draw_warning("*file empty*")
+				return
+			}
+
 			file, err := os.Open(full_path)
 			if err != nil {
-				state.DrawFiles(screen)
+				state.DrawFiles()
+				draw_warning("*file cant be opened*")
 				return
 			}
 			defer file.Close()
-			DrawFilePreview(screen, file, width/2, 0, width-1, height-1)
+
+			// kinda hacky but works
+			buffer := make([]byte, 512)
+			n, _ := file.Read(buffer)
+			file.Seek(0, 0)
+
+			contentType := http.DetectContentType(buffer[:n])
+
+			if strings.HasPrefix(contentType, "text/") || contentType == "application/javascript" || contentType == "application/json" {
+				DrawFilePreview(file, width/2, 0, width-1, height-1)
+			} else {
+				draw_warning(contentType)
+			}
 		}
 	}
-	state.DrawFiles(screen)
+	state.DrawFiles()
 	screen.Show()
 }
 
-func DrawFilePreview(scr tcell.Screen, handle *os.File, x1, y1, x2, y2 int) {
+func DrawFilePreview(handle *os.File, x1, y1, x2, y2 int) {
 	content, err := io.ReadAll(io.LimitReader(handle, 10000)) // 10KB limit is fast
 	if err != nil {
 		return
@@ -353,7 +377,7 @@ func DrawFilePreview(scr tcell.Screen, handle *os.File, x1, y1, x2, y2 int) {
 				continue
 			}
 			if x <= x2 {
-				scr.SetContent(x, y, r, nil, tcellStyle)
+				screen.SetContent(x, y, r, nil, tcellStyle)
 				x++
 			}
 		}
@@ -379,7 +403,7 @@ func DrawDirPreview(scr tcell.Screen, full_path string, x1, y1, x2, y2 int) {
 	}
 }
 
-func (state *State) DrawFiles(scr tcell.Screen) {
+func (state *State) DrawFiles() {
 	filesToShow := state.CurrentList()
 
 	pwdLen := len(state.Pwd) + 1
@@ -396,7 +420,7 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 
 	if len(filesToShow) == 0 {
 		drawText(1, 2, 999, 3, STYLE_MID, "*nothing here*")
-		scr.Show()
+		screen.Show()
 		return
 	}
 
@@ -447,7 +471,7 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 		label := state.ActivePrompt.Label
 
 		for i := 0; i < width; i++ {
-			scr.SetContent(i, 1, ' ', nil, STYLE_BG)
+			screen.SetContent(i, 1, ' ', nil, STYLE_BG)
 		}
 
 		drawText(1, 1, len(label), 1, STYLE_FG, label)
@@ -469,7 +493,7 @@ func (state *State) DrawFiles(scr tcell.Screen) {
 		} else {
 			drawText(currentX, 1, width-1, 1, STYLE_BG, input)
 		}
-		scr.ShowCursor(len(label)+len(input)+1, 1)
+		screen.ShowCursor(len(label)+len(input)+1, 1)
 	}
 }
 
