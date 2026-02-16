@@ -113,26 +113,29 @@ func main() {
 
 	quit_on_sel := func() {
 		screen.Fini()
-
 		selectedPath := state.Select()
 		if selectedPath == "" {
 			os.Exit(0)
 		}
-		fmt.Println("$EDITOR", selectedPath)
+		fmt.Printf("$EDITOR %s\n", escapePath(selectedPath))
 		os.Exit(0)
 	}
-
 	quit_on_pwd := func() {
 		screen.Fini()
+		var p string
 		if state.Input == "" {
-			fmt.Println("cd", state.Pwd)
+			p = state.Pwd
 		} else {
-			p := path.Join(state.Pwd, state.Files[state.Selected].Name())
-			fmt.Println("cd", p)
+			items := state.CurrentList()
+			if len(items) > 0 && state.Selected < len(items) {
+				p = filepath.Join(state.Pwd, items[state.Selected])
+			} else {
+				p = state.Pwd
+			}
 		}
+		fmt.Printf("cd %s\n", escapePath(p))
 		os.Exit(0)
 	}
-
 	state.Redraw()
 
 	for {
@@ -710,4 +713,8 @@ func isDirEntry(path string, entry os.DirEntry) bool {
 func invertStyle(st tcell.Style) tcell.Style {
 	fg, bg, _ := st.Decompose()
 	return st.Foreground(bg).Background(fg)
+}
+
+func escapePath(p string) string {
+	return "'" + strings.ReplaceAll(p, "'", "'\\''") + "'"
 }
