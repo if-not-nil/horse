@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -160,19 +161,22 @@ func main() {
 					continue
 				}
 
-				p := path.Join(state.Pwd, selectedEntry.Name())
+				full_path := path.Join(state.Pwd, selectedEntry.Name())
 
-				screen.Fini()
-				switch runtime.GOOS {
-				case "linux":
-					fmt.Printf("xdg-open %s\n", p)
-				case "darwin":
-					fmt.Printf("open %s\n", p)
-				default:
-					fmt.Println("echo dont know how to open a file on your OS! pls submit an issue if you do, it should be simple")
-				}
-
-				os.Exit(0)
+				go func(p string) {
+					var cmd *exec.Cmd
+					switch runtime.GOOS {
+					case "linux":
+						cmd = exec.Command("xdg-open", p)
+					case "darwin":
+						cmd = exec.Command("open", p)
+					default:
+						screen.Fini()
+						fmt.Println("dont actually know how to open a file on your OS, pls submit an issue")
+						os.Exit(0)
+					}
+					_ = cmd.Run()
+				}(full_path)
 
 			case tcell.KeyCtrlD:
 				selected := state.Files[state.Selected].Name()
