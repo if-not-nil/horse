@@ -1,13 +1,4 @@
-# `horse
-
-```
-            .''   generic filepicker with a focus on ergonomics, inspired by zellij's
-  ._.-.___.' (`\ 
- //(        ( `'
-'/ )\ ).__. ) 
-' <' `\ ._/'\   
-   `   \     \
-```
+# `horse, a filepicker
 
 <img width="1279" height="558" alt="image" src="https://github.com/user-attachments/assets/af82c907-1e1f-48c1-90df-8121f65216e0" />
 
