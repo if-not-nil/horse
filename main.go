@@ -166,14 +166,29 @@ func main() {
 				}
 
 				full_path := path.Join(state.Pwd, selectedEntry.Name())
+				os.Chdir(state.Pwd)
+
+				stat, err := os.Stat(full_path)
+				is_exec := false
+				if err == nil && stat.Mode()&0111 != 0 {
+					is_exec = true
+				}
 
 				go func(p string) {
 					var cmd *exec.Cmd
 					switch runtime.GOOS {
 					case "linux":
-						cmd = exec.Command("xdg-open", p)
+						if is_exec {
+							cmd = exec.Command(p)
+						} else {
+							cmd = exec.Command("xdg-open", p)
+						}
 					case "darwin":
-						cmd = exec.Command("open", p)
+						if is_exec {
+							cmd = exec.Command(p)
+						} else {
+							cmd = exec.Command("open", p)
+						}
 					default:
 						screen.Fini()
 						fmt.Println("dont actually know how to open a file on your OS, pls submit an issue")
