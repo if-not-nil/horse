@@ -27,7 +27,8 @@ var (
 	width                           = 20
 	height                          = 20
 	STYLE_BG                        = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
-	STYLE_DIR                       = tcell.StyleDefault.Background(tcell.ColorBlack).Foreground(tcell.ColorBlue)
+	STYLE_DIR                       = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorDarkCyan)
+	STYLE_DIR_SEL                   = tcell.StyleDefault.Background(tcell.ColorDarkCyan).Foreground(tcell.ColorWhite)
 	STYLE_FG                        = tcell.StyleDefault.Background(tcell.ColorWhite).Foreground(tcell.ColorBlack)
 	STYLE_MID                       = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
 	draw_file_preview               = false
@@ -170,7 +171,7 @@ func main() {
 
 				stat, err := os.Stat(full_path)
 				is_exec := false
-				if err == nil && stat.Mode()&0111 != 0 {
+				if err == nil && stat.Mode()&0o111 != 0 {
 					is_exec = true
 				}
 
@@ -474,11 +475,11 @@ func (state *State) DrawFiles() {
 			style = STYLE_FG
 		}
 		if isDir {
-			style = style.Foreground(tcell.ColorBlue).Background(tcell.ColorBlack)
-			name += "/"
+			style = STYLE_DIR
 			if state.Selected == i {
-				style = invertStyle(style)
+				style = STYLE_DIR_SEL
 			}
+			name += "/"
 		}
 
 		drawText(1, y, 999, y, style, name)
