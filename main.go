@@ -156,6 +156,10 @@ func main() {
 			}
 			switch ev.Key() {
 
+			case tcell.KeyCtrlS:
+				if selectedPath := state.SelectedPath(); selectedPath != "" {
+					screen.SetClipboard([]byte(selectedPath))
+				}
 			case tcell.KeyCtrlO:
 				var selectedEntry os.DirEntry
 				if len(state.Results) > 0 {
@@ -655,6 +659,15 @@ func (s *State) MoveCursor(n int) {
 //
 // fs & search
 //
+
+func (s *State) SelectedPath() string {
+	list := s.CurrentList()
+	if len(list) == 0 || s.Selected < 0 || s.Selected >= len(list) {
+		return ""
+	}
+
+	return path.Join(s.Pwd, list[s.Selected])
+}
 
 func (s *State) Select() string {
 	var list []os.DirEntry

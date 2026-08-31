@@ -35,6 +35,8 @@ C-e:
     go to `~` or `/`
 C-a:
     bring up a prompt for creating files/directories (try qwer/asdf/zx)
+C-s:
+    copy the selected item's path
 Tab:
     select an entry. if a file, open, if a directory, enter
 Enter:
@@ -53,5 +55,5 @@ Backspace:
 **`plans**
 
 - [ ] (C-h or C-b), (C-l or C-f) is up and down direcectories
-- [ ] C-s copies the selected item's path
+- [x] C-s copies the selected item's path
 - [ ] retain the last selection when going between directories
