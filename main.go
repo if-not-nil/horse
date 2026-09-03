@@ -148,7 +148,9 @@ func main() {
 
 		switch ev := ev.(type) {
 		case *tcell.EventResize:
+			width, height = screen.Size()
 			screen.Sync()
+			state.Redraw()
 		case *tcell.EventKey:
 
 			if state.ActivePrompt.IsActive {
@@ -205,7 +207,11 @@ func main() {
 				}(full_path)
 
 			case tcell.KeyCtrlD:
-				selected := state.Files[state.Selected].Name()
+				list := state.CurrentList()
+				if len(list) == 0 || state.Selected >= len(list) {
+					continue
+				}
+				selected := list[state.Selected]
 				fullPath := path.Join(state.Pwd, selected)
 
 				state.OpenPrompt("delete "+selected+"? (y/n): ", func(input string) {
@@ -543,9 +549,13 @@ func (s *State) backspace(full_word bool) {
 		return
 	}
 
-	modified := ""
-	if !full_word {
-		modified = s.Input[:len(s.Input)-1]
+	modified := s.Input[:len(s.Input)-1]
+	if full_word {
+		fields := strings.Fields(s.Input)
+		if len(fields) > 0 {
+			fields = fields[:len(fields)-1]
+		}
+		modified = strings.Join(fields, " ")
 	}
 
 	results := s.search(modified)
@@ -717,19 +727,19 @@ func (s *State) SwitchDir(where string) error {
 		s.LastSel[s.Pwd] = list[s.Selected]
 	}
 
-	s.Pwd = cleanPath + "/"
+	// read first so a dir we cant open doesnt leave us in a broken state
+	newPwd := cleanPath + "/"
+	files, err := os.ReadDir(newPwd)
+	if err != nil {
+		return fmt.Errorf("failed to read directory %s: %w", newPwd, err)
+	}
 
+	s.Pwd = newPwd
+	s.Files = files
 	s.Input = ""
 	s.Selected = 0
 	s.TopIndex = 0
 	s.Results = nil
-
-	files, err := os.ReadDir(s.Pwd)
-	if err != nil {
-		return fmt.Errorf("failed to read directory %s: %w", s.Pwd, err)
-	}
-
-	s.Files = files
 
 	// retain the last selection when coming back to this dir
 	if name, ok := s.LastSel[s.Pwd]; ok {
