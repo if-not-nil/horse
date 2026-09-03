@@ -37,8 +37,10 @@ C-a:
     bring up a prompt for creating files/directories (try qwer/asdf/zx)
 C-s:
     copy the selected item's path
-Tab:
-    select an entry. if a file, open, if a directory, enter
+C-h, C-b:
+    go up a directory
+Tab, C-l, C-f:
+    select an entry. if a file, open, if a directory, enter (go down)
 Enter:
     cd to current/selected directory
 Backspace:
@@ -54,6 +56,6 @@ Backspace:
 
 **`plans**
 
-- [ ] (C-h or C-b), (C-l or C-f) is up and down direcectories
+- [x] (C-h or C-b), (C-l or C-f) is up and down direcectories
 - [x] C-s copies the selected item's path
-- [ ] retain the last selection when going between directories
+- [x] retain the last selection when going between directories

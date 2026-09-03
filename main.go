@@ -44,6 +44,8 @@ type State struct {
 	Selected int
 	TopIndex int
 
+	LastSel map[string]string // remembers the cursor per dir
+
 	ActivePrompt Prompt
 }
 
@@ -252,7 +254,10 @@ func main() {
 				}
 			case tcell.KeyEnter:
 				quit_on_pwd()
-			case tcell.KeyBackspace, tcell.KeyBackspace2, tcell.KeyCtrlB:
+			// KeyCtrlH is the same code as backspace, so real backspace is KeyBackspace2
+			case tcell.KeyCtrlH, tcell.KeyCtrlB:
+				state.upDir()
+			case tcell.KeyBackspace2:
 				state.backspace(false)
 			case tcell.KeyCtrlW:
 				state.backspace(true)
@@ -524,13 +529,17 @@ func (state *State) DrawFiles() {
 // input & ux
 //
 
+func (s *State) upDir() {
+	splitPwd := strings.Split(strings.TrimSuffix(s.Pwd, "/"), "/")
+	if len(splitPwd) > 1 {
+		newPwd := strings.Join(splitPwd[:len(splitPwd)-1], "/")
+		s.SwitchDir(fmt.Sprint("/", newPwd))
+	}
+}
+
 func (s *State) backspace(full_word bool) {
 	if len(s.Input) < 1 {
-		splitPwd := strings.Split(strings.TrimSuffix(s.Pwd, "/"), "/")
-		if len(splitPwd) > 1 {
-			newPwd := strings.Join(splitPwd[:len(splitPwd)-1], "/")
-			s.SwitchDir(fmt.Sprint("/", newPwd))
-		}
+		s.upDir()
 		return
 	}
 
@@ -700,10 +709,19 @@ func (s *State) SwitchDir(where string) error {
 		return fmt.Errorf("must provide an absolute path")
 	}
 
+	// remember where the cursor was in the dir we're leaving
+	if s.LastSel == nil {
+		s.LastSel = make(map[string]string)
+	}
+	if list := s.CurrentList(); len(list) > 0 && s.Selected < len(list) {
+		s.LastSel[s.Pwd] = list[s.Selected]
+	}
+
 	s.Pwd = cleanPath + "/"
 
 	s.Input = ""
 	s.Selected = 0
+	s.TopIndex = 0
 	s.Results = nil
 
 	files, err := os.ReadDir(s.Pwd)
@@ -712,6 +730,20 @@ func (s *State) SwitchDir(where string) error {
 	}
 
 	s.Files = files
+
+	// retain the last selection when coming back to this dir
+	if name, ok := s.LastSel[s.Pwd]; ok {
+		for i, f := range files {
+			if f.Name() == name {
+				s.Selected = i
+				break
+			}
+		}
+		visibleHeight := height - 3
+		if s.Selected >= visibleHeight {
+			s.TopIndex = s.Selected - visibleHeight + 1
+		}
+	}
 	return nil
 }
 
