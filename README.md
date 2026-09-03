@@ -1,13 +1,4 @@
-# `horse
-
-```
-            .''   generic filepicker with a focus on ergonomics, inspired by zellij's
-  ._.-.___.' (`\ 
- //(        ( `'
-'/ )\ ).__. ) 
-' <' `\ ._/'\   
-   `   \     \
-```
+# `horse, a filepicker
 
 <img width="1279" height="558" alt="image" src="https://github.com/user-attachments/assets/af82c907-1e1f-48c1-90df-8121f65216e0" />
 
@@ -44,8 +35,12 @@ C-e:
     go to `~` or `/`
 C-a:
     bring up a prompt for creating files/directories (try qwer/asdf/zx)
-Tab:
-    select an entry. if a file, open, if a directory, enter
+C-s:
+    copy the selected item's path
+C-h, C-b:
+    go up a directory
+Tab, C-l, C-f:
+    select an entry. if a file, open, if a directory, enter (go down)
 Enter:
     cd to current/selected directory
 Backspace:
@@ -61,6 +56,6 @@ Backspace:
 
 **`plans**
 
-- [ ] (C-h or C-b), (C-l or C-f) is up and down direcectories
-- [ ] C-s copies the selected item's path
-- [ ] retain the last selection when going between directories
+- [x] (C-h or C-b), (C-l or C-f) is up and down direcectories
+- [x] C-s copies the selected item's path
+- [x] retain the last selection when going between directories

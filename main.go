@@ -27,7 +27,8 @@ var (
 	width                           = 20
 	height                          = 20
 	STYLE_BG                        = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
-	STYLE_DIR                       = tcell.StyleDefault.Background(tcell.ColorBlack).Foreground(tcell.ColorBlue)
+	STYLE_DIR                       = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorDarkCyan)
+	STYLE_DIR_SEL                   = tcell.StyleDefault.Background(tcell.ColorDarkCyan).Foreground(tcell.ColorWhite)
 	STYLE_FG                        = tcell.StyleDefault.Background(tcell.ColorWhite).Foreground(tcell.ColorBlack)
 	STYLE_MID                       = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
 	draw_file_preview               = false
@@ -42,6 +43,8 @@ type State struct {
 	Results  []os.DirEntry
 	Selected int
 	TopIndex int
+
+	LastSel map[string]string // remembers the cursor per dir
 
 	ActivePrompt Prompt
 }
@@ -155,6 +158,10 @@ func main() {
 			}
 			switch ev.Key() {
 
+			case tcell.KeyCtrlS:
+				if selectedPath := state.SelectedPath(); selectedPath != "" {
+					screen.SetClipboard([]byte(selectedPath))
+				}
 			case tcell.KeyCtrlO:
 				var selectedEntry os.DirEntry
 				if len(state.Results) > 0 {
@@ -166,14 +173,29 @@ func main() {
 				}
 
 				full_path := path.Join(state.Pwd, selectedEntry.Name())
+				os.Chdir(state.Pwd)
+
+				stat, err := os.Stat(full_path)
+				is_exec := false
+				if err == nil && stat.Mode()&0o111 != 0 {
+					is_exec = true
+				}
 
 				go func(p string) {
 					var cmd *exec.Cmd
 					switch runtime.GOOS {
 					case "linux":
-						cmd = exec.Command("xdg-open", p)
+						if is_exec {
+							cmd = exec.Command(p)
+						} else {
+							cmd = exec.Command("xdg-open", p)
+						}
 					case "darwin":
-						cmd = exec.Command("open", p)
+						if is_exec {
+							cmd = exec.Command(p)
+						} else {
+							cmd = exec.Command("open", p)
+						}
 					default:
 						screen.Fini()
 						fmt.Println("dont actually know how to open a file on your OS, pls submit an issue")
@@ -232,7 +254,10 @@ func main() {
 				}
 			case tcell.KeyEnter:
 				quit_on_pwd()
-			case tcell.KeyBackspace, tcell.KeyBackspace2, tcell.KeyCtrlB:
+			// KeyCtrlH is the same code as backspace, so real backspace is KeyBackspace2
+			case tcell.KeyCtrlH, tcell.KeyCtrlB:
+				state.upDir()
+			case tcell.KeyBackspace2:
 				state.backspace(false)
 			case tcell.KeyCtrlW:
 				state.backspace(true)
@@ -459,11 +484,11 @@ func (state *State) DrawFiles() {
 			style = STYLE_FG
 		}
 		if isDir {
-			style = style.Foreground(tcell.ColorBlue).Background(tcell.ColorBlack)
-			name += "/"
+			style = STYLE_DIR
 			if state.Selected == i {
-				style = invertStyle(style)
+				style = STYLE_DIR_SEL
 			}
+			name += "/"
 		}
 
 		drawText(1, y, 999, y, style, name)
@@ -504,13 +529,17 @@ func (state *State) DrawFiles() {
 // input & ux
 //
 
+func (s *State) upDir() {
+	splitPwd := strings.Split(strings.TrimSuffix(s.Pwd, "/"), "/")
+	if len(splitPwd) > 1 {
+		newPwd := strings.Join(splitPwd[:len(splitPwd)-1], "/")
+		s.SwitchDir(fmt.Sprint("/", newPwd))
+	}
+}
+
 func (s *State) backspace(full_word bool) {
 	if len(s.Input) < 1 {
-		splitPwd := strings.Split(strings.TrimSuffix(s.Pwd, "/"), "/")
-		if len(splitPwd) > 1 {
-			newPwd := strings.Join(splitPwd[:len(splitPwd)-1], "/")
-			s.SwitchDir(fmt.Sprint("/", newPwd))
-		}
+		s.upDir()
 		return
 	}
 
@@ -640,6 +669,15 @@ func (s *State) MoveCursor(n int) {
 // fs & search
 //
 
+func (s *State) SelectedPath() string {
+	list := s.CurrentList()
+	if len(list) == 0 || s.Selected < 0 || s.Selected >= len(list) {
+		return ""
+	}
+
+	return path.Join(s.Pwd, list[s.Selected])
+}
+
 func (s *State) Select() string {
 	var list []os.DirEntry
 	if len(s.Results) > 0 {
@@ -671,10 +709,19 @@ func (s *State) SwitchDir(where string) error {
 		return fmt.Errorf("must provide an absolute path")
 	}
 
+	// remember where the cursor was in the dir we're leaving
+	if s.LastSel == nil {
+		s.LastSel = make(map[string]string)
+	}
+	if list := s.CurrentList(); len(list) > 0 && s.Selected < len(list) {
+		s.LastSel[s.Pwd] = list[s.Selected]
+	}
+
 	s.Pwd = cleanPath + "/"
 
 	s.Input = ""
 	s.Selected = 0
+	s.TopIndex = 0
 	s.Results = nil
 
 	files, err := os.ReadDir(s.Pwd)
@@ -683,6 +730,20 @@ func (s *State) SwitchDir(where string) error {
 	}
 
 	s.Files = files
+
+	// retain the last selection when coming back to this dir
+	if name, ok := s.LastSel[s.Pwd]; ok {
+		for i, f := range files {
+			if f.Name() == name {
+				s.Selected = i
+				break
+			}
+		}
+		visibleHeight := height - 3
+		if s.Selected >= visibleHeight {
+			s.TopIndex = s.Selected - visibleHeight + 1
+		}
+	}
 	return nil
 }
 
