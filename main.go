@@ -2,10 +2,17 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"flag"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"log"
+	"math"
 	"net/http" // todo: another library for filetypes
 	"os"
 	"os/exec"
@@ -17,6 +24,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/lithammer/fuzzysearch/fuzzy"
+	"golang.org/x/sys/unix"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -34,6 +42,8 @@ var (
 	draw_file_preview               = false
 	HL_STYLE          *chroma.Style = styles.Get("monokai")
 	screen            tcell.Screen
+	kitty_ok          = false  // terminal speaks the kitty graphics protocol
+	ttyFile           *os.File // where we write kitty escapes (stdout is eval'd)
 )
 
 type State struct {
@@ -57,6 +67,8 @@ type State struct {
 	Copying  bool   // editing the path for a copy, on a line below the source
 	CopyOrig string // the file being copied
 	CopyBuf  string // the edited destination path
+
+	KittyShown string // path of the image currently drawn via kitty (for caching)
 
 	ActivePrompt Prompt
 }
@@ -277,6 +289,15 @@ func main() {
 	}
 	width, height = screen.Size()
 
+	// kitty images go to /dev/tty since stdout gets eval'd by the shell
+	ttyFile, _ = os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	term := os.Getenv("TERM")
+	kitty_ok = ttyFile != nil && (term == "xterm-kitty" ||
+		strings.Contains(term, "ghostty") ||
+		os.Getenv("KITTY_WINDOW_ID") != "" ||
+		os.Getenv("GHOSTTY_RESOURCES_DIR") != "" ||
+		os.Getenv("WEZTERM_PANE") != "")
+
 	screen.SetStyle(STYLE_BG)
 
 	screen.Clear()
@@ -289,6 +310,7 @@ func main() {
 	state.SwitchDir(a)
 
 	quit_on_sel := func() {
+		kittyClear()
 		screen.Fini()
 		selectedPath := state.Select()
 		if selectedPath == "" {
@@ -298,6 +320,7 @@ func main() {
 		os.Exit(0)
 	}
 	quit_on_pwd := func() {
+		kittyClear()
 		screen.Fini()
 		var p string
 		if state.Input == "" {
@@ -323,6 +346,11 @@ func main() {
 		switch ev := ev.(type) {
 		case *tcell.EventResize:
 			width, height = screen.Size()
+			// force the image to be redrawn at the new size
+			if state.KittyShown != "" {
+				kittyClear()
+				state.KittyShown = ""
+			}
 			screen.Sync()
 			state.Redraw()
 		case *tcell.EventKey:
@@ -500,6 +528,7 @@ func main() {
 					state.Sel = nil
 					break
 				}
+				kittyClear()
 				screen.Fini()
 				os.Exit(0)
 			// scrolling
@@ -568,7 +597,173 @@ func drawText(x1, y1, x2, y2 int, style tcell.Style, text string) {
 	}
 }
 
+//
+// kitty image previews
+//
+
+// previewImagePath returns the selected file if it's an image we can show, else ""
+func (s *State) previewImagePath() string {
+	if !kitty_ok || !draw_file_preview {
+		return ""
+	}
+	files := s.Files
+	if len(s.Results) > 0 {
+		files = s.Results
+	}
+	if len(files) == 0 || s.Selected < 0 || s.Selected >= len(files) {
+		return ""
+	}
+	entry := files[s.Selected]
+	full := path.Join(s.Pwd, entry.Name())
+	if isDirEntry(full, entry) {
+		return ""
+	}
+	info, err := entry.Info()
+	if err != nil || info.Size() == 0 || info.Size() > 10*1000*1000 {
+		return ""
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	if strings.HasPrefix(http.DetectContentType(buf[:n]), "image/") {
+		return full
+	}
+	return ""
+}
+
+// reconcileKitty draws want in the preview pane, or clears it, only when it changes
+func (s *State) reconcileKitty(want string) {
+	if !kitty_ok || want == s.KittyShown {
+		return
+	}
+	if s.KittyShown != "" {
+		kittyClear()
+	}
+	s.KittyShown = ""
+	if want == "" {
+		return
+	}
+
+	data, err := os.ReadFile(want)
+	if err != nil {
+		return
+	}
+	// pull the pixel dims before re-encoding, to keep the aspect ratio
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	data, err = toPNG(data)
+	if err != nil {
+		return
+	}
+
+	cols := width - width/2 - 1
+	rows := height - 1
+	if cols < 1 || rows < 1 {
+		return
+	}
+	// fit into the pane without stretching, then place at its top-left (1-based)
+	c, r := fitCells(cfg.Width, cfg.Height, cols, rows)
+	kittyPlace(data, width/2+1, 1, c, r)
+	s.KittyShown = want
+}
+
+// fitCells shrinks imgW x imgH (pixels) into at most cols x rows cells, keeping aspect
+// without this function shit gets shrinked and looks so fucking funny lmao.
+// the main limitation of this is that as it's going to be an approximation however
+// hard you try and fit it, just by the nature of having columns and rows so
+// ¯\_(ツ)_/¯
+func fitCells(imgW, imgH, cols, rows int) (int, int) {
+	if imgW < 1 || imgH < 1 {
+		return cols, rows
+	}
+	cw, ch := cellSize()
+	scale := math.Min(float64(cols*cw)/float64(imgW), float64(rows*ch)/float64(imgH))
+	c := int(math.Round(float64(imgW) * scale / float64(cw)))
+	r := int(math.Round(float64(imgH) * scale / float64(ch)))
+	// clamp into [1, pane]
+	c = min(max(c, 1), cols)
+	r = min(max(r, 1), rows)
+	return c, r
+}
+
+// cellSize asks the terminal for its cell size in pixels, falling back to a ~1:2 guess
+func cellSize() (int, int) {
+	cw, ch := 10, 20
+	if ttyFile == nil {
+		return cw, ch
+	}
+	ws, err := unix.IoctlGetWinsize(int(ttyFile.Fd()), unix.TIOCGWINSZ)
+	if err == nil && ws.Xpixel > 0 && ws.Ypixel > 0 && ws.Col > 0 && ws.Row > 0 {
+		cw = int(ws.Xpixel) / int(ws.Col)
+		ch = int(ws.Ypixel) / int(ws.Row)
+	}
+	return cw, ch
+}
+
+func kittyClear() {
+	if !kitty_ok || ttyFile == nil {
+		return
+	}
+	fmt.Fprint(ttyFile, "\x1b_Ga=d,d=A\x1b\\")
+}
+
+// kittyPlace transmits a png and displays it, scaled into cols x rows cells at (col,row)
+func kittyPlace(png []byte, col, row, cols, rows int) {
+	if ttyFile == nil {
+		return
+	}
+	fmt.Fprintf(ttyFile, "\x1b[%d;%dH", row, col)
+
+	b64 := base64.StdEncoding.EncodeToString(png)
+	const chunk = 4096
+	first := true
+	for len(b64) > 0 {
+		n := chunk
+		if n > len(b64) {
+			n = len(b64)
+		}
+		piece := b64[:n]
+		b64 = b64[n:]
+
+		more := 0
+		if len(b64) > 0 {
+			more = 1
+		}
+		if first {
+			// q=2 stops the terminal replying, which would pollute tcell's input
+			fmt.Fprintf(ttyFile, "\x1b_Ga=T,f=100,t=d,q=2,c=%d,r=%d,m=%d;%s\x1b\\", cols, rows, more, piece)
+			first = false
+		} else {
+			fmt.Fprintf(ttyFile, "\x1b_Gm=%d;%s\x1b\\", more, piece)
+		}
+	}
+}
+
+// toPNG passes png through, and re-encodes anything else (jpeg/gif) so kitty can scale it
+func toPNG(data []byte) ([]byte, error) {
+	if len(data) > 8 && string(data[1:4]) == "PNG" {
+		return data, nil
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (state *State) Redraw() {
+	wantImg := state.previewImagePath()
+	defer state.reconcileKitty(wantImg) // emit after tcell has flushed, so it lands on top
 	screen.Clear()
 
 	files := state.Files
@@ -585,9 +780,9 @@ func (state *State) Redraw() {
 	selected_entry := files[state.Selected]
 	full_path := path.Join(state.Pwd, selected_entry.Name())
 
-	if draw_file_preview {
+	if draw_file_preview && wantImg == "" {
 		if isDirEntry(full_path, selected_entry) {
-			DrawDirPreview(screen, full_path, width/2, 0, width-1, height-1)
+			DrawDirPreview(full_path, width/2, 0, width-1, height-1)
 		} else {
 			info, err := selected_entry.Info()
 			draw_warning := func(text string) {
@@ -683,7 +878,7 @@ func DrawFilePreview(handle *os.File, x1, y1, x2, y2 int) {
 	}
 }
 
-func DrawDirPreview(scr tcell.Screen, full_path string, x1, y1, x2, y2 int) {
+func DrawDirPreview(full_path string, x1, y1, x2, y2 int) {
 	dir_entries, err := os.ReadDir(full_path)
 	if err != nil {
 		return
@@ -728,12 +923,8 @@ func (state *State) DrawFiles() {
 		return
 	}
 
-	if state.Selected >= len(filesToShow) {
-		state.Selected = len(filesToShow) - 1
-	}
-	if state.TopIndex > state.Selected {
-		state.TopIndex = state.Selected
-	}
+	state.Selected = min(state.Selected, len(filesToShow)-1)
+	state.TopIndex = min(state.TopIndex, state.Selected)
 
 	visibleHeight := height - 3
 	start := state.TopIndex
@@ -971,12 +1162,10 @@ func (s *State) MoveCursor(n int) {
 		s.Selected = 0
 	}
 
+	// keep the selection inside the visible window
 	visibleHeight := height - 3
-	if s.Selected < s.TopIndex {
-		s.TopIndex = s.Selected
-	} else if s.Selected >= s.TopIndex+visibleHeight {
-		s.TopIndex = s.Selected - visibleHeight + 1
-	}
+	s.TopIndex = min(s.TopIndex, s.Selected)
+	s.TopIndex = max(s.TopIndex, s.Selected-visibleHeight+1)
 }
 
 //
@@ -1089,11 +1278,6 @@ func isDirEntry(path string, entry os.DirEntry) bool {
 //
 // helpers
 //
-
-func invertStyle(st tcell.Style) tcell.Style {
-	fg, bg, _ := st.Decompose()
-	return st.Foreground(bg).Background(fg)
-}
 
 func escapePath(p string) string {
 	return "'" + strings.ReplaceAll(p, "'", "'\\''") + "'"
