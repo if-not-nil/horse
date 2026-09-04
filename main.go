@@ -45,6 +45,7 @@ type State struct {
 	TopIndex int
 
 	LastSel map[string]string // remembers the cursor per dir
+	PrevDir string            // last dir we were in, for ~ toggle
 
 	ActivePrompt Prompt
 }
@@ -272,7 +273,12 @@ func main() {
 
 				state.SwitchDir(target_dir)
 			case tcell.KeyRune:
-				state.doInput(ev.Rune())
+				// ~ jumps to the last dir, but only when not mid-search
+				if ev.Rune() == '~' && state.Input == "" {
+					state.togglePrevDir()
+				} else {
+					state.doInput(ev.Rune())
+				}
 			}
 			state.Redraw()
 		}
@@ -532,6 +538,13 @@ func (state *State) DrawFiles() {
 // input & ux
 //
 
+func (s *State) togglePrevDir() {
+	if s.PrevDir == "" {
+		return
+	}
+	s.SwitchDir(s.PrevDir)
+}
+
 func (s *State) upDir() {
 	splitPwd := strings.Split(strings.TrimSuffix(s.Pwd, "/"), "/")
 	if len(splitPwd) > 1 {
@@ -729,6 +742,11 @@ func (s *State) SwitchDir(where string) error {
 	files, err := os.ReadDir(newPwd)
 	if err != nil {
 		return fmt.Errorf("failed to read directory %s: %w", newPwd, err)
+	}
+
+	// remember the dir we came from so ~ can jump back
+	if s.Pwd != "" && s.Pwd != newPwd {
+		s.PrevDir = s.Pwd
 	}
 
 	s.Pwd = newPwd
