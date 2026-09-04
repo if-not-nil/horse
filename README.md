@@ -37,6 +37,9 @@ C-a:
     bring up a prompt for creating files/directories (try qwer/asdf/zx)
 C-s:
     copy the selected item's path
+C-r:
+    rename the selected item inline. type a path (a/b/c) to move it
+    (Enter to confirm, Escape to cancel)
 C-h, C-b:
     go up a directory
 Tab, C-l, C-f:
@@ -55,17 +58,3 @@ Backspace:
   -preview
     	show a file preview on the right side (default true)
 ```
-
-**`plans**
-
-- [x] (C-h or C-b), (C-l or C-f) is up and down direcectories
-- [x] C-s copies the selected item's path
-- [x] retain the last selection when going between directories
-- [ ] use kitty image protocol for the preview window
-- [ ] C-r to rename file (like netrw/dired, with ability to move). it will start editing inline
-- [ ] C-S-r to copy file, puts a line below the line where you edit the path
-- [ ] C-x to enter selection mode, where tab adds to the selection
-    file under cursor is selected by default, so that you can quickly doubletap C-x C-x
-  - [ ] C-x again to open a command prompt for putting that into bash (`cp {f1.txt,f2.rv} ./`)
-        this will be the only way to batch-do anything with files
-- [x] ~ to move back-and-forth between the last two directories (like vim's C-6)

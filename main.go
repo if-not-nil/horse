@@ -47,6 +47,10 @@ type State struct {
 	LastSel map[string]string // remembers the cursor per dir
 	PrevDir string            // last dir we were in, for ~ toggle
 
+	Renaming   bool   // editing the selected name inline
+	RenameOrig string // the name we started renaming
+	RenameBuf  string // the edited text
+
 	ActivePrompt Prompt
 }
 
@@ -81,6 +85,52 @@ func (s *State) HandlePromptInput(ev *tcell.EventKey) {
 		}
 	case tcell.KeyRune:
 		s.ActivePrompt.Input += string(ev.Rune())
+	}
+}
+
+func (s *State) HandleRenameInput(ev *tcell.EventKey) {
+	switch ev.Key() {
+	case tcell.KeyEnter:
+		s.commitRename()
+	case tcell.KeyEscape, tcell.KeyCtrlC:
+		s.Renaming = false
+		screen.HideCursor()
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if len(s.RenameBuf) > 0 {
+			s.RenameBuf = s.RenameBuf[:len(s.RenameBuf)-1]
+		}
+	case tcell.KeyRune:
+		s.RenameBuf += string(ev.Rune())
+	}
+}
+
+func (s *State) commitRename() {
+	s.Renaming = false
+	screen.HideCursor()
+
+	name := s.RenameBuf
+	if name == "" || name == s.RenameOrig {
+		return
+	}
+
+	oldPath := path.Join(s.Pwd, s.RenameOrig)
+	newPath := path.Join(s.Pwd, name)
+	os.MkdirAll(filepath.Dir(newPath), 0o755) // lets you move by typing a/b/c
+	os.Rename(oldPath, newPath)
+
+	s.SwitchDir(s.Pwd)
+
+	// keep the cursor on the renamed file
+	base := filepath.Base(name)
+	for i, f := range s.Files {
+		if f.Name() == base {
+			s.Selected = i
+			break
+		}
+	}
+	visibleHeight := height - 3
+	if s.Selected >= visibleHeight {
+		s.TopIndex = s.Selected - visibleHeight + 1
 	}
 }
 
@@ -154,6 +204,11 @@ func main() {
 				state.Redraw()
 				continue
 			}
+			if state.Renaming {
+				state.HandleRenameInput(ev)
+				state.Redraw()
+				continue
+			}
 			switch ev.Key() {
 
 			case tcell.KeyCtrlS:
@@ -216,6 +271,15 @@ func main() {
 						state.SwitchDir(state.Pwd)
 					}
 				})
+
+			case tcell.KeyCtrlR:
+				list := state.CurrentList()
+				if len(list) == 0 || state.Selected >= len(list) {
+					continue
+				}
+				state.Renaming = true
+				state.RenameOrig = list[state.Selected]
+				state.RenameBuf = list[state.Selected]
 
 			case tcell.KeyCtrlA:
 				state.OpenPrompt("create: ", func(name string) {
@@ -475,6 +539,16 @@ func (state *State) DrawFiles() {
 	for i := start; i < end; i++ {
 		y := i - start + 2
 		name := filesToShow[i]
+
+		// inline rename editor on the selected row
+		if state.Renaming && state.Selected == i {
+			for x := 1; x < width; x++ {
+				screen.SetContent(x, y, ' ', nil, STYLE_BG)
+			}
+			drawText(1, y, 999, y, STYLE_FG, state.RenameBuf)
+			screen.ShowCursor(1+len(state.RenameBuf), y)
+			continue
+		}
 
 		style := STYLE_BG
 
