@@ -97,11 +97,6 @@ func main() {
 		log.Fatalf("%+v", err)
 	}
 	width, height = screen.Size()
-	tmpFile, err := os.Create("/tmp/horselast")
-	if err != nil {
-		panic("couldnt create /tmp/horselast")
-	}
-	defer tmpFile.Close()
 
 	screen.SetStyle(STYLE_BG)
 
@@ -323,7 +318,9 @@ func (state *State) Redraw() {
 	full_path := path.Join(state.Pwd, selected_entry.Name())
 
 	if draw_file_preview {
-		if !selected_entry.IsDir() {
+		if isDirEntry(full_path, selected_entry) {
+			DrawDirPreview(screen, full_path, width/2, 0, width-1, height-1)
+		} else {
 			info, err := selected_entry.Info()
 			draw_warning := func(text string) {
 				drawText(width/2+2, 2, width-1, 2, STYLE_MID, text)
