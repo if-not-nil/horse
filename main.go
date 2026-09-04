@@ -54,6 +54,10 @@ type State struct {
 	Selecting bool            // multi-select mode is on
 	Sel       map[string]bool // names marked in the current dir
 
+	Copying  bool   // editing the path for a copy, on a line below the source
+	CopyOrig string // the file being copied
+	CopyBuf  string // the edited destination path
+
 	ActivePrompt Prompt
 }
 
@@ -135,6 +139,90 @@ func (s *State) commitRename() {
 	if s.Selected >= visibleHeight {
 		s.TopIndex = s.Selected - visibleHeight + 1
 	}
+}
+
+func (s *State) HandleCopyInput(ev *tcell.EventKey) {
+	switch ev.Key() {
+	case tcell.KeyEnter:
+		s.commitCopy()
+	case tcell.KeyEscape, tcell.KeyCtrlC:
+		s.Copying = false
+		screen.HideCursor()
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if len(s.CopyBuf) > 0 {
+			s.CopyBuf = s.CopyBuf[:len(s.CopyBuf)-1]
+		}
+	case tcell.KeyRune:
+		s.CopyBuf += string(ev.Rune())
+	}
+}
+
+func (s *State) commitCopy() {
+	s.Copying = false
+	screen.HideCursor()
+
+	name := s.CopyBuf
+	if name == "" || name == s.CopyOrig {
+		return
+	}
+
+	srcPath := path.Join(s.Pwd, s.CopyOrig)
+	dstPath := path.Join(s.Pwd, name)
+	os.MkdirAll(filepath.Dir(dstPath), 0o755) // lets you copy into a/b/c
+	copyPath(srcPath, dstPath)
+
+	s.SwitchDir(s.Pwd)
+
+	// land on the new copy
+	base := filepath.Base(name)
+	for i, f := range s.Files {
+		if f.Name() == base {
+			s.Selected = i
+			break
+		}
+	}
+	visibleHeight := height - 3
+	if s.Selected >= visibleHeight {
+		s.TopIndex = s.Selected - visibleHeight + 1
+	}
+}
+
+// copyPath copies a file or a whole dir, keeping perms
+func copyPath(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(dst, info.Mode()); err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := copyPath(path.Join(src, e.Name()), path.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Chmod(info.Mode())
 }
 
 func (s *State) toggleSelect() {
@@ -244,6 +332,11 @@ func main() {
 				state.Redraw()
 				continue
 			}
+			if state.Copying {
+				state.HandleCopyInput(ev)
+				state.Redraw()
+				continue
+			}
 			switch ev.Key() {
 
 			case tcell.KeyCtrlS:
@@ -315,6 +408,20 @@ func main() {
 				state.Renaming = true
 				state.RenameOrig = list[state.Selected]
 				state.RenameBuf = list[state.Selected]
+
+			case tcell.KeyCtrlY:
+				list := state.CurrentList()
+				if len(list) == 0 || state.Selected >= len(list) {
+					continue
+				}
+				state.Copying = true
+				state.CopyOrig = list[state.Selected]
+				state.CopyBuf = list[state.Selected]
+				// make room for the edit line below the source
+				vh := height - 3
+				if state.Selected-state.TopIndex >= vh-1 {
+					state.TopIndex++
+				}
 
 			case tcell.KeyCtrlX:
 				if !state.Selecting {
@@ -621,8 +728,9 @@ func (state *State) DrawFiles() {
 	start := state.TopIndex
 	end := min(start+visibleHeight, len(filesToShow))
 
+	copyShift := 0
 	for i := start; i < end; i++ {
-		y := i - start + 2
+		y := i - start + 2 + copyShift
 		name := filesToShow[i]
 
 		// inline rename editor on the selected row
@@ -665,6 +773,17 @@ func (state *State) DrawFiles() {
 		}
 
 		drawText(1, y, 999, y, style, name)
+
+		// on copy, edit the destination path on a new line below the source
+		if state.Copying && state.Selected == i {
+			ey := y + 1
+			for x := 1; x < width; x++ {
+				screen.SetContent(x, ey, ' ', nil, STYLE_BG)
+			}
+			drawText(1, ey, 999, ey, STYLE_FG, state.CopyBuf)
+			screen.ShowCursor(1+len(state.CopyBuf), ey)
+			copyShift = 1
+		}
 	}
 
 	if state.ActivePrompt.IsActive {

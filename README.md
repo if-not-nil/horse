@@ -40,6 +40,9 @@ C-s:
 C-r:
     rename the selected item inline. type a path (a/b/c) to move it
     (Enter to confirm, Escape to cancel)
+C-y:
+    copy the selected file/dir. the destination is edited on a line below
+    the source; type a path (a/b/c) to copy elsewhere (Enter/Escape)
 C-x:
     selection mode: marks the current file. Tab marks/unmarks more,
     C-x again runs a bash command on them (% = the files, e.g. `cp % ./`;
