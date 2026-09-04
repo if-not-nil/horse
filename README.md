@@ -40,6 +40,10 @@ C-s:
 C-r:
     rename the selected item inline. type a path (a/b/c) to move it
     (Enter to confirm, Escape to cancel)
+C-x:
+    selection mode: marks the current file. Tab marks/unmarks more,
+    C-x again runs a bash command on them (% = the files, e.g. `cp % ./`;
+    if there's no %, they're appended). Escape cancels
 C-h, C-b:
     go up a directory
 Tab, C-l, C-f:

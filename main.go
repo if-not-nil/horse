@@ -51,6 +51,9 @@ type State struct {
 	RenameOrig string // the name we started renaming
 	RenameBuf  string // the edited text
 
+	Selecting bool            // multi-select mode is on
+	Sel       map[string]bool // names marked in the current dir
+
 	ActivePrompt Prompt
 }
 
@@ -132,6 +135,38 @@ func (s *State) commitRename() {
 	if s.Selected >= visibleHeight {
 		s.TopIndex = s.Selected - visibleHeight + 1
 	}
+}
+
+func (s *State) toggleSelect() {
+	list := s.CurrentList()
+	if len(list) == 0 || s.Selected >= len(list) {
+		return
+	}
+	name := list[s.Selected]
+	if s.Sel[name] {
+		delete(s.Sel, name)
+	} else {
+		s.Sel[name] = true
+	}
+}
+
+// selectedNames returns the marked names in listing order, ignoring any filter
+func (s *State) selectedNames() []string {
+	var out []string
+	for _, f := range s.Files {
+		if s.Sel[f.Name()] {
+			out = append(out, f.Name())
+		}
+	}
+	return out
+}
+
+// braceList makes {a,b,c} like the readme wants, or just the name for one
+func braceList(names []string) string {
+	if len(names) == 1 {
+		return names[0]
+	}
+	return "{" + strings.Join(names, ",") + "}"
 }
 
 func main() {
@@ -281,6 +316,42 @@ func main() {
 				state.RenameOrig = list[state.Selected]
 				state.RenameBuf = list[state.Selected]
 
+			case tcell.KeyCtrlX:
+				if !state.Selecting {
+					list := state.CurrentList()
+					if len(list) == 0 || state.Selected >= len(list) {
+						continue
+					}
+					// enter selection mode with the current file marked
+					state.Selecting = true
+					state.Sel = map[string]bool{list[state.Selected]: true}
+					break
+				}
+				// second C-x: run a bash command on the marked files
+				names := state.selectedNames()
+				if len(names) == 0 {
+					state.Selecting = false
+					state.Sel = nil
+					break
+				}
+				token := braceList(names)
+				state.OpenPrompt("bash (%=selection): ", func(cmd string) {
+					if strings.TrimSpace(cmd) == "" {
+						return
+					}
+					final := cmd
+					if strings.Contains(final, "%") {
+						final = strings.ReplaceAll(final, "%", token)
+					} else {
+						final = final + " " + token
+					}
+					c := exec.Command("bash", "-c", final)
+					c.Dir = state.Pwd
+					_ = c.Run()
+					state.Selecting = false
+					state.Sel = nil
+				})
+
 			case tcell.KeyCtrlA:
 				state.OpenPrompt("create: ", func(name string) {
 					if name == "" {
@@ -306,6 +377,11 @@ func main() {
 					state.SwitchDir(last_dir)
 				})
 			case tcell.KeyEscape, tcell.KeyCtrlC:
+				if state.Selecting {
+					state.Selecting = false
+					state.Sel = nil
+					break
+				}
 				screen.Fini()
 				os.Exit(0)
 			// scrolling
@@ -314,6 +390,10 @@ func main() {
 			case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
 				state.MoveCursor(-1)
 			case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF:
+				if state.Selecting {
+					state.toggleSelect()
+					break
+				}
 				shouldQuit := state.Select()
 				if shouldQuit != "" {
 					quit_on_sel()
@@ -519,6 +599,11 @@ func (state *State) DrawFiles() {
 	scrollInfo := fmt.Sprintf("[%d/%d]", state.Selected+1, len(filesToShow))
 	drawText(width-len(scrollInfo)-2, 1, 999, 1, STYLE_MID, scrollInfo)
 
+	if state.Selecting {
+		hint := fmt.Sprintf("SELECT %d  tab:mark C-x:run esc:cancel", len(state.Sel))
+		drawText(1, 0, 999, 0, STYLE_MID, hint)
+	}
+
 	if len(filesToShow) == 0 {
 		drawText(1, 2, 999, 3, STYLE_MID, "*nothing here*")
 		screen.Show()
@@ -572,6 +657,11 @@ func (state *State) DrawFiles() {
 				style = STYLE_DIR_SEL
 			}
 			name += "/"
+		}
+
+		// mark selected files with a * in the left gutter
+		if state.Selecting && state.Sel[filesToShow[i]] {
+			screen.SetContent(0, y, '*', nil, STYLE_FG)
 		}
 
 		drawText(1, y, 999, y, style, name)
