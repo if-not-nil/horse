@@ -84,8 +84,11 @@ func (s *State) HandlePromptInput(ev *tcell.EventKey) {
 		s.ActivePrompt.IsActive = false
 		s.SwitchDir(s.Pwd)
 		screen.HideCursor()
-	case tcell.KeyEscape:
+	case tcell.KeyEscape, tcell.KeyCtrlC:
 		s.ActivePrompt.IsActive = false
+		s.Selecting = false
+		screen.HideCursor()
+		s.Redraw()
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if len(s.ActivePrompt.Input) > 0 {
 			s.ActivePrompt.Input = s.ActivePrompt.Input[:len(s.ActivePrompt.Input)-1]
@@ -101,6 +104,7 @@ func (s *State) HandleRenameInput(ev *tcell.EventKey) {
 		s.commitRename()
 	case tcell.KeyEscape, tcell.KeyCtrlC:
 		s.Renaming = false
+		s.Redraw()
 		screen.HideCursor()
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if len(s.RenameBuf) > 0 {
@@ -236,6 +240,7 @@ func (s *State) toggleSelect() {
 	} else {
 		s.Sel[name] = true
 	}
+	s.MoveCursor(1)
 }
 
 // selectedNames returns the marked names in listing order, ignoring any filter
@@ -337,6 +342,8 @@ func main() {
 				state.Redraw()
 				continue
 			}
+			//
+			// normal mode
 			switch ev.Key() {
 
 			case tcell.KeyCtrlS:
@@ -432,6 +439,7 @@ func main() {
 					// enter selection mode with the current file marked
 					state.Selecting = true
 					state.Sel = map[string]bool{list[state.Selected]: true}
+					state.MoveCursor(1)
 					break
 				}
 				// second C-x: run a bash command on the marked files
@@ -458,6 +466,9 @@ func main() {
 					state.Selecting = false
 					state.Sel = nil
 				})
+
+				// TODO: when we have a proper line editor, put the cursor behind " %"
+				// state.ActivePrompt.Input = " %"
 
 			case tcell.KeyCtrlA:
 				state.OpenPrompt("create: ", func(name string) {
@@ -707,8 +718,8 @@ func (state *State) DrawFiles() {
 	drawText(width-len(scrollInfo)-2, 1, 999, 1, STYLE_MID, scrollInfo)
 
 	if state.Selecting {
-		hint := fmt.Sprintf("SELECT %d  tab:mark C-x:run esc:cancel", len(state.Sel))
-		drawText(1, 0, 999, 0, STYLE_MID, hint)
+		hint := fmt.Sprintf("selected [%d/%d]", len(state.Sel), len(filesToShow))
+		drawText(1, 0, 999, 0, STYLE_DIR, hint)
 	}
 
 	if len(filesToShow) == 0 {
