@@ -1,4 +1,4 @@
-# `horse, a filepicker
+# `horse, a file manager
 
 <img width="1279" height="558" alt="image" src="https://github.com/user-attachments/assets/af82c907-1e1f-48c1-90df-8121f65216e0" />
 
@@ -66,3 +66,7 @@ Backspace:
   -preview
     	show a file preview on the right side (default true)
 ```
+
+**`todo**
+[ ] shared configurable read-line component for all inputs
+[ ] consolidate more ops into C-x mode

@@ -2,8 +2,8 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"image"
@@ -22,8 +22,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/SerenaFontaine/kgp"
 	"github.com/gdamore/tcell/v2"
 	"github.com/lithammer/fuzzysearch/fuzzy"
+	"golang.org/x/image/draw"
 	"golang.org/x/sys/unix"
 
 	"github.com/alecthomas/chroma/v2"
@@ -42,8 +44,9 @@ var (
 	draw_file_preview               = false
 	HL_STYLE          *chroma.Style = styles.Get("monokai")
 	screen            tcell.Screen
-	kitty_ok          = false  // terminal speaks the kitty graphics protocol
-	ttyFile           *os.File // where we write kitty escapes (stdout is eval'd)
+	kitty_ok          = false                   // terminal speaks the kitty graphics protocol
+	in_tmux           = os.Getenv("TMUX") != "" // /dev/tty is tmux's pty, not the real terminal
+	ttyFile           *os.File                  // where we write kitty escapes (stdout is eval'd)
 )
 
 type State struct {
@@ -296,7 +299,11 @@ func main() {
 		strings.Contains(term, "ghostty") ||
 		os.Getenv("KITTY_WINDOW_ID") != "" ||
 		os.Getenv("GHOSTTY_RESOURCES_DIR") != "" ||
-		os.Getenv("WEZTERM_PANE") != "")
+		os.Getenv("WEZTERM_PANE") != "" ||
+		// tmux hides the outer terminals env vars and rewrites TERM,
+		// but forwards kitty graphics if `set -g allow-passthrough on` is set
+		// everyone has this enabled already
+		in_tmux)
 
 	screen.SetStyle(STYLE_BG)
 
@@ -601,6 +608,16 @@ func drawText(x1, y1, x2, y2 int, style tcell.Style, text string) {
 // kitty image previews
 //
 
+// holds png bytes already resized for a given placement,
+// so scrolling back to an image at the same size is free.
+type kittyCacheEntry struct {
+	mtime int64
+	size  int64
+	png   []byte
+}
+
+var kittyCache = map[string]kittyCacheEntry{}
+
 // previewImagePath returns the selected file if it's an image we can show, else ""
 func (s *State) previewImagePath() string {
 	if !kitty_ok || !draw_file_preview {
@@ -652,12 +669,8 @@ func (s *State) reconcileKitty(want string) {
 	if err != nil {
 		return
 	}
-	// pull the pixel dims before re-encoding, to keep the aspect ratio
+	// pull the pixel dims before resizing, to keep the aspect ratio
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return
-	}
-	data, err = toPNG(data)
 	if err != nil {
 		return
 	}
@@ -669,8 +682,81 @@ func (s *State) reconcileKitty(want string) {
 	}
 	// fit into the pane without stretching, then place at its top-left (1-based)
 	c, r := fitCells(cfg.Width, cfg.Height, cols, rows)
+	data, err = kittyPNG(want, data, cfg.Width, cfg.Height, c, r)
+	if err != nil {
+		return
+	}
+
 	kittyPlace(data, width/2+1, 1, c, r)
 	s.KittyShown = want
+}
+
+// ret: png bytes of want resized to fit a c x r cell placement
+// small pngs that already fit are passed through untouched
+// anything larger or non-png is decoded, downscaled to pane pixels,
+// and re-encoded, because rendering megabytes is really really slow
+//
+// results are cached by path + mtime + size + placement geometry
+func kittyPNG(imgPath string, data []byte, imgW, imgH, cols, rows int) ([]byte, error) {
+	cw, ch := cellSize()
+	tw, th := cols*cw, rows*ch
+
+	st, err := os.Stat(imgPath)
+	if err != nil {
+		return nil, err
+	}
+	key := strings.Join([]string{
+		imgPath,
+		fmt.Sprint(st.ModTime().UnixNano()),
+		fmt.Sprint(st.Size()),
+		fmt.Sprint(cols), fmt.Sprint(rows),
+		fmt.Sprint(cw), fmt.Sprint(ch),
+	}, "\x00")
+	if e, ok := kittyCache[key]; ok && e.mtime == st.ModTime().UnixNano() && e.size == st.Size() {
+		return e.png, nil
+	}
+
+	// happy path path:
+	// a png that already fits the pane needs no pixel work
+	if isPNG(data) && imgW <= tw && imgH <= th {
+		return data, nil
+	}
+
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	b := src.Bounds()
+	imgW, imgH = b.Dx(), b.Dy()
+
+	scale := math.Min(float64(tw)/float64(imgW), float64(th)/float64(imgH))
+	if scale <= 0 {
+		return nil, fmt.Errorf("bad placement size")
+	}
+	if scale > 1 {
+		// the terminal scales up for zero moneys
+		scale = 1
+	}
+	dw, dh := max(int(math.Round(float64(imgW)*scale)), 1), max(int(math.Round(float64(imgH)*scale)), 1)
+
+	dst := image.NewNRGBA(image.Rect(0, 0, dw, dh))
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, b, draw.Over, nil)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return nil, err
+	}
+	out := buf.Bytes()
+
+	if len(kittyCache) > 32 {
+		clear(kittyCache)
+	}
+	kittyCache[key] = kittyCacheEntry{mtime: st.ModTime().UnixNano(), size: st.Size(), png: out}
+	return out, nil
+}
+
+func isPNG(data []byte) bool {
+	return len(data) > 8 && string(data[1:4]) == "PNG"
 }
 
 // fitCells shrinks imgW x imgH (pixels) into at most cols x rows cells, keeping aspect
@@ -706,11 +792,22 @@ func cellSize() (int, int) {
 	return cw, ch
 }
 
+// wraps a kitty graphics escape sequence for tmux's dcs passthrough
+// tmux will just drop them otherwise because for no reason other than it hates us and mr. goyal
+func wrapTmux(seq string) string {
+	if !in_tmux {
+		return seq
+	}
+	escaped := strings.ReplaceAll(seq, "\x1b", "\x1b\x1b")
+	return "\x1bPtmux;" + escaped + "\x1b\\"
+}
+
 func kittyClear() {
 	if !kitty_ok || ttyFile == nil {
 		return
 	}
-	fmt.Fprint(ttyFile, "\x1b_Ga=d,d=A\x1b\\")
+	// same wire bytes as before (a=d,d=A): delete all placements and free data
+	fmt.Fprint(ttyFile, wrapTmux(kgp.DeleteAllFree().Encode()))
 }
 
 // kittyPlace transmits a png and displays it, scaled into cols x rows cells at (col,row)
@@ -718,47 +815,30 @@ func kittyPlace(png []byte, col, row, cols, rows int) {
 	if ttyFile == nil {
 		return
 	}
-	fmt.Fprintf(ttyFile, "\x1b[%d;%dH", row, col)
+	cmd := kgp.NewTransmitDisplay().
+		Format(kgp.FormatPNG).
+		TransmitDirect(png).
+		DisplaySize(cols, rows).
+		// if we let the terminal move it past the image itll render the image at 0, 0 sometimes
+		CursorMovement(false).
+		// otherwise it might pollute tcell
+		ResponseSuppression(kgp.ResponseOKOnly).
+		Build()
 
-	b64 := base64.StdEncoding.EncodeToString(png)
-	const chunk = 4096
-	first := true
-	for len(b64) > 0 {
-		n := chunk
-		if n > len(b64) {
-			n = len(b64)
-		}
-		piece := b64[:n]
-		b64 = b64[n:]
+	// tmux chokes on very long passthrough payloads so use smaller chunks there
+	// both satisfy kgp's EncodeChunked which is <=4096, divisible by 4
+	chunk := 4096
+	if in_tmux {
+		chunk = 1024
+	}
 
-		more := 0
-		if len(b64) > 0 {
-			more = 1
-		}
-		if first {
-			// q=2 stops the terminal replying, which would pollute tcell's input
-			fmt.Fprintf(ttyFile, "\x1b_Ga=T,f=100,t=d,q=2,c=%d,r=%d,m=%d;%s\x1b\\", cols, rows, more, piece)
-			first = false
-		} else {
-			fmt.Fprintf(ttyFile, "\x1b_Gm=%d;%s\x1b\\", more, piece)
-		}
+	// this HAS to stay one buffered flush
+	w := bufio.NewWriter(ttyFile)
+	fmt.Fprintf(w, "\x1b[%d;%dH", row, col)
+	for _, seq := range cmd.EncodeChunked(chunk) {
+		w.WriteString(wrapTmux(seq))
 	}
-}
-
-// toPNG passes png through, and re-encodes anything else (jpeg/gif) so kitty can scale it
-func toPNG(data []byte) ([]byte, error) {
-	if len(data) > 8 && string(data[1:4]) == "PNG" {
-		return data, nil
-	}
-	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	w.Flush()
 }
 
 func (state *State) Redraw() {

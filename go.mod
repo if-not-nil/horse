@@ -3,8 +3,10 @@ module github.com/if-not-nil/horse
 go 1.24.3
 
 require (
+	github.com/SerenaFontaine/kgp v0.1.0
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/gdamore/tcell/v2 v2.8.1
+	golang.org/x/image v0.28.0
 )
 
 require github.com/dlclark/regexp2 v1.11.5 // indirect
