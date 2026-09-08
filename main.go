@@ -368,12 +368,18 @@ func promptCreate() {
 			dir := filepath.Dir(fullPath)
 			os.MkdirAll(dir, 0o755)
 			lastDir = dir
-			if f, err := os.Create(fullPath); err == nil {
-				f.Close()
-			}
+			_ = createNewFile(fullPath)
 		}
 		SwitchDir(lastDir)
 	})
+}
+
+func createNewFile(name string) error {
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // exit multi-select mode, or quit horse entirely
