@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -195,14 +196,14 @@ func HandleKey(ev *tcell.EventKey) {
 		MoveCursor(1)
 	case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
 		MoveCursor(-1)
-	case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF:
+	case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF, tcell.KeyRight:
 		selectOrToggle()
 	case tcell.KeyEnter:
 		quitOnPwd()
 	// KeyCtrlH is the same code as backspace, and the actual backspace is KeyBackspace2
 	case tcell.KeyCtrlH, tcell.KeyCtrlB:
 		upDir()
-	case tcell.KeyBackspace2:
+	case tcell.KeyBackspace2, tcell.KeyLeft:
 		backspace(false)
 	case tcell.KeyCtrlW:
 		backspace(true)
@@ -368,12 +369,18 @@ func promptCreate() {
 			dir := filepath.Dir(fullPath)
 			os.MkdirAll(dir, 0o755)
 			lastDir = dir
-			if f, err := os.Create(fullPath); err == nil {
-				f.Close()
-			}
+			_ = createNewFile(fullPath)
 		}
 		SwitchDir(lastDir)
 	})
+}
+
+func createNewFile(name string) error {
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // exit multi-select mode, or quit horse entirely
@@ -752,6 +759,11 @@ func braceList(names []string) string {
 func copyPath(src, dst string) error {
 	info, err := os.Stat(src)
 	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("destination already exists: %s", dst)
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if info.IsDir() {

@@ -48,9 +48,9 @@ C-x:
     selection mode: marks the current file. Tab marks/unmarks more,
     C-x again runs a bash command on them (% = the files, e.g. `cp % ./`;
     if there's no %, they're appended). Escape cancels
-C-h, C-b:
+Left, C-h, C-b:
     go up a directory
-Tab, C-l, C-f:
+Tab, Right, C-l, C-f:
     select an entry. if a file, open, if a directory, enter (go down)
 Enter:
     cd to current/selected directory
