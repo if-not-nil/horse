@@ -33,7 +33,6 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/mattn/go-sixel"
 	"golang.org/x/image/draw"
-	"golang.org/x/sys/unix"
 	xterm "golang.org/x/term"
 
 	"github.com/alecthomas/chroma/v2"
@@ -46,6 +45,8 @@ func main() {
 	flag.BoolVar(&showPreview, "preview", true, "show a file preview on the right side")
 	flag.BoolVar(&showPreview, "p", true, "alias for -preview")
 	flag.Parse()
+
+	loadConfig() // keybinding overrides, if any
 
 	// probe for sixel before tcell grabs the terminal (it needs a raw-mode query)
 	sixelOK = detectSixel()
@@ -184,50 +185,194 @@ const (
 // key handling //
 //////////////////
 
-// HandleKey dispatches a key event in normal mode (no prompt or inline edit active)
+// HandleKey dispatches a key event in normal mode (no prompt or inline edit active).
+// bindings live in keyBindings / runeBindings, which loadConfig can override
 func HandleKey(ev *tcell.EventKey) {
-	switch ev.Key() {
-	case tcell.KeyCtrlS:
-		copySelectedPath()
-	case tcell.KeyCtrlO:
-		openSelected()
-	case tcell.KeyCtrlD:
-		promptDelete()
-	case tcell.KeyCtrlR:
-		startRename()
-	case tcell.KeyCtrlY:
-		startCopy()
-	case tcell.KeyCtrlX:
-		handleMultiSelect()
-	case tcell.KeyCtrlA:
-		promptCreate()
-	case tcell.KeyEscape, tcell.KeyCtrlC:
-		cancelOrQuit()
-	case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
-		MoveCursor(1)
-	case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
-		MoveCursor(-1)
-	case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF:
-		selectOrToggle()
-	case tcell.KeyEnter:
-		quitOnPwd()
-	// KeyCtrlH is the same code as backspace, and the actual backspace is KeyBackspace2
-	case tcell.KeyCtrlH, tcell.KeyCtrlB:
-		upDir()
-	case tcell.KeyBackspace2:
-		backspace(false)
-	case tcell.KeyCtrlW:
-		backspace(true)
-	case tcell.KeyCtrlE:
-		toggleHome()
-	case tcell.KeyRune:
-		// ~ jumps to the last dir, but only when not mid-search
-		if ev.Rune() == '~' && Input == "" {
-			togglePrevDir()
-		} else {
-			doInput(ev.Rune())
+	if ev.Key() == tcell.KeyRune {
+		// most runes go to the search box; only bound runes (e.g. ~) are commands,
+		// and only when not mid-search so filenames stay typeable
+		if act, ok := runeBindings[ev.Rune()]; ok && Input == "" {
+			runAction(act)
+			return
+		}
+		doInput(ev.Rune())
+		return
+	}
+	if act, ok := keyBindings[ev.Key()]; ok {
+		runAction(act)
+	}
+}
+
+func runAction(name string) {
+	if fn := actions[name]; fn != nil {
+		fn()
+	}
+}
+
+//////////////////////
+// keybinding config //
+//////////////////////
+
+// actions maps a config action name to what it does in normal mode
+var actions = map[string]func(){
+	"quit":        cancelOrQuit,
+	"down":        func() { MoveCursor(1) },
+	"up":          func() { MoveCursor(-1) },
+	"select":      selectOrToggle,
+	"cd":          quitOnPwd,
+	"updir":       upDir,
+	"delchar":     func() { backspace(false) },
+	"delword":     func() { backspace(true) },
+	"home":        toggleHome,
+	"copypath":    copySelectedPath,
+	"open":        openSelected,
+	"delete":      promptDelete,
+	"rename":      startRename,
+	"copy":        startCopy,
+	"multiselect": handleMultiSelect,
+	"create":      promptCreate,
+	"prevdir":     togglePrevDir,
+}
+
+// default bindings, all overridable through the config file
+var keyBindings = map[tcell.Key]string{
+	tcell.KeyCtrlS:      "copypath",
+	tcell.KeyCtrlO:      "open",
+	tcell.KeyCtrlD:      "delete",
+	tcell.KeyCtrlR:      "rename",
+	tcell.KeyCtrlY:      "copy",
+	tcell.KeyCtrlX:      "multiselect",
+	tcell.KeyCtrlA:      "create",
+	tcell.KeyEscape:     "quit",
+	tcell.KeyCtrlC:      "quit",
+	tcell.KeyDown:       "down",
+	tcell.KeyCtrlJ:      "down",
+	tcell.KeyCtrlN:      "down",
+	tcell.KeyUp:         "up",
+	tcell.KeyCtrlK:      "up",
+	tcell.KeyCtrlP:      "up",
+	tcell.KeyTab:        "select",
+	tcell.KeyCtrlL:      "select",
+	tcell.KeyCtrlF:      "select",
+	tcell.KeyEnter:      "cd",
+	tcell.KeyCtrlH:      "updir", // same code as backspace; real backspace is KeyBackspace2
+	tcell.KeyCtrlB:      "updir",
+	tcell.KeyBackspace2: "delchar",
+	tcell.KeyCtrlW:      "delword",
+	tcell.KeyCtrlE:      "home",
+}
+
+var runeBindings = map[rune]string{
+	'~': "prevdir",
+}
+
+// configPath resolves the config file: $HORSE_CONFIG, else %APPDATA%\horse\config on
+// windows, else $XDG_CONFIG_HOME/horse/config, else ~/.config/horse/config
+func configPath() string {
+	if p := os.Getenv("HORSE_CONFIG"); p != "" {
+		return p
+	}
+	if runtime.GOOS == "windows" {
+		if appdata := os.Getenv("APPDATA"); appdata != "" {
+			return filepath.Join(appdata, "horse", "config")
 		}
 	}
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "horse", "config")
+}
+
+// loadConfig applies keybinding overrides from the config file. each line is
+// `action = key, key, ...`; blanks and #comments are skipped, unknown
+// actions/keys are ignored, and a missing file just leaves the defaults
+func loadConfig() {
+	path := configPath()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, rhs, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if _, ok := actions[name]; !ok {
+			continue // unknown action, skip
+		}
+		// the config replaces the default keys for this action
+		unbindAction(name)
+		for _, tok := range strings.Split(rhs, ",") {
+			tok = strings.TrimSpace(tok)
+			if key, r, isRune, ok := parseKey(tok); ok {
+				if isRune {
+					runeBindings[r] = name
+				} else {
+					keyBindings[key] = name
+				}
+			}
+		}
+	}
+}
+
+// unbindAction removes every key currently mapped to name
+func unbindAction(name string) {
+	for k, a := range keyBindings {
+		if a == name {
+			delete(keyBindings, k)
+		}
+	}
+	for r, a := range runeBindings {
+		if a == name {
+			delete(runeBindings, r)
+		}
+	}
+}
+
+// parseKey turns a config token (ctrl+x, tab, enter, esc, backspace, space,
+// up/down/left/right, or a single character) into a tcell key or a rune
+func parseKey(s string) (key tcell.Key, r rune, isRune, ok bool) {
+	switch strings.ToLower(s) {
+	case "up":
+		return tcell.KeyUp, 0, false, true
+	case "down":
+		return tcell.KeyDown, 0, false, true
+	case "left":
+		return tcell.KeyLeft, 0, false, true
+	case "right":
+		return tcell.KeyRight, 0, false, true
+	case "tab":
+		return tcell.KeyTab, 0, false, true
+	case "enter", "return":
+		return tcell.KeyEnter, 0, false, true
+	case "esc", "escape":
+		return tcell.KeyEscape, 0, false, true
+	case "backspace":
+		return tcell.KeyBackspace2, 0, false, true
+	case "space":
+		return 0, ' ', true, true
+	}
+	l := strings.ToLower(s)
+	if len(l) == 6 && strings.HasPrefix(l, "ctrl+") && l[5] >= 'a' && l[5] <= 'z' {
+		return tcell.KeyCtrlA + tcell.Key(l[5]-'a'), 0, false, true
+	}
+	if rs := []rune(s); len(rs) == 1 {
+		return 0, rs[0], true, true
+	}
+	return 0, 0, false, false
 }
 
 // copySelectedPath puts the selected entry's full path on the system clipboard
@@ -264,6 +409,9 @@ func openSelected() {
 			} else {
 				cmd = exec.Command("open", p)
 			}
+		case "windows":
+			// start handles both docs and .exe; the "" is start's title arg
+			cmd = exec.Command("cmd", "/c", "start", "", p)
 		default:
 			screen.Fini()
 			fmt.Println("dont actually know how to open a file on your OS, pls submit an issue")
@@ -1075,18 +1223,15 @@ func fitCells(imgW, imgH, cols, rows int) (int, int) {
 	return c, r
 }
 
-// cellSize asks the terminal for its cell size in pixels, falling back to a ~1:2 guess
+// cellSize asks the terminal for its cell size in pixels, falling back to a ~1:2 guess.
+// the actual query is platform specific (see cellsize_unix.go / cellsize_other.go)
 func cellSize() (int, int) {
-	cw, ch := 10, 20
-	if ttyFile == nil {
-		return cw, ch
+	if ttyFile != nil {
+		if cw, ch, ok := termCellSize(int(ttyFile.Fd())); ok {
+			return cw, ch
+		}
 	}
-	ws, err := unix.IoctlGetWinsize(int(ttyFile.Fd()), unix.TIOCGWINSZ)
-	if err == nil && ws.Xpixel > 0 && ws.Ypixel > 0 && ws.Col > 0 && ws.Row > 0 {
-		cw = int(ws.Xpixel) / int(ws.Col)
-		ch = int(ws.Ypixel) / int(ws.Row)
-	}
-	return cw, ch
+	return 10, 20
 }
 
 // wraps a kitty graphics escape sequence for tmux's dcs passthrough

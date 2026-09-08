@@ -67,6 +67,35 @@ Backspace:
     	show a file preview on the right side (default true)
 ```
 
+**`config**
+
+rebind keys in `~/.config/horse/config` (`%APPDATA%\horse\config` on windows, or
+`$XDG_CONFIG_HOME/horse/config`, or `$HORSE_CONFIG` to point anywhere).
+one `action = key, key, ...` per line; `#` comments and blanks are ignored. a line replaces
+that action's default keys. keys: `ctrl+x`, `tab`, `enter`, `esc`, `backspace`, `space`,
+`up`/`down`/`left`/`right`, or a single character (e.g. `~`).
+
+```
+# example
+down        = ctrl+j, ctrl+n, down
+up          = ctrl+k, ctrl+p, up
+updir       = ctrl+h, ctrl+b
+select      = tab, ctrl+l, ctrl+f
+cd          = enter
+quit        = esc, ctrl+c
+copypath    = ctrl+s
+open        = ctrl+o
+delete      = ctrl+d
+rename      = ctrl+r
+copy        = ctrl+y
+multiselect = ctrl+x
+create      = ctrl+a
+delchar     = backspace
+delword     = ctrl+w
+home        = ctrl+e
+prevdir     = ~
+```
+
 **`todo**
 [ ] shared configurable read-line component for all inputs
 [ ] consolidate more ops into C-x mode
