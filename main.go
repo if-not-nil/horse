@@ -195,14 +195,14 @@ func HandleKey(ev *tcell.EventKey) {
 		MoveCursor(1)
 	case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
 		MoveCursor(-1)
-	case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF:
+	case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF, tcell.KeyRight:
 		selectOrToggle()
 	case tcell.KeyEnter:
 		quitOnPwd()
 	// KeyCtrlH is the same code as backspace, and the actual backspace is KeyBackspace2
 	case tcell.KeyCtrlH, tcell.KeyCtrlB:
 		upDir()
-	case tcell.KeyBackspace2:
+	case tcell.KeyBackspace2, tcell.KeyLeft:
 		backspace(false)
 	case tcell.KeyCtrlW:
 		backspace(true)
