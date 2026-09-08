@@ -76,8 +76,8 @@ func main() {
 		log.Fatal(err, "getpwd")
 	}
 
-	state.SwitchDir(cwd)
-	state.Redraw()
+	SwitchDir(cwd)
+	Redraw()
 
 	for {
 		screen.Show()
@@ -88,25 +88,25 @@ func main() {
 		case *tcell.EventResize:
 			width, height = screen.Size()
 			// force the image to be redrawn at the new size
-			if state.KittyShown != "" {
+			if KittyShown != "" {
 				kittyClear()
-				state.KittyShown = ""
+				KittyShown = ""
 			}
 			screen.Sync()
-			state.Redraw()
+			Redraw()
 		case *tcell.EventKey:
-			if state.ActivePrompt.IsActive {
-				state.HandlePromptInput(ev)
-				state.Redraw()
+			if ActivePrompt.IsActive {
+				HandlePromptInput(ev)
+				Redraw()
 				continue
 			}
-			if state.Edit != editNone {
-				state.HandleEditInput(ev)
-				state.Redraw()
+			if Edit != editNone {
+				HandleEditInput(ev)
+				Redraw()
 				continue
 			}
-			state.HandleKey(ev)
-			state.Redraw()
+			HandleKey(ev)
+			Redraw()
 		}
 	}
 }
@@ -135,21 +135,6 @@ var (
 	inTmux        = os.Getenv("TMUX") != "" // /dev/tty is tmux's pty, not the real terminal
 	ttyFile       *os.File                  // where we write kitty escapes (stdout is eval'd)
 
-	// the single running instance. global by design because it makes everything simpler, dont pr about this
-	// TODO: move all fields out of there into here
-	state State
-)
-
-type editKind int
-
-// go enums look do like this
-const (
-	editNone editKind = iota
-	editRename
-	editCopy
-)
-
-type State struct {
 	Pwd       string
 	Input     string
 	Files     []os.DirEntry
@@ -172,73 +157,82 @@ type State struct {
 	KittyShown string // path of the image currently drawn via kitty (for caching)
 
 	ActivePrompt Prompt
-}
+)
+
+type editKind int
+
+// go enums look do like this
+const (
+	editNone editKind = iota
+	editRename
+	editCopy
+)
 
 //////////////////
 // key handling //
 //////////////////
 
 // HandleKey dispatches a key event in normal mode (no prompt or inline edit active)
-func (s *State) HandleKey(ev *tcell.EventKey) {
+func HandleKey(ev *tcell.EventKey) {
 	switch ev.Key() {
 	case tcell.KeyCtrlS:
-		s.copySelectedPath()
+		copySelectedPath()
 	case tcell.KeyCtrlO:
-		s.openSelected()
+		openSelected()
 	case tcell.KeyCtrlD:
-		s.promptDelete()
+		promptDelete()
 	case tcell.KeyCtrlR:
-		s.startRename()
+		startRename()
 	case tcell.KeyCtrlY:
-		s.startCopy()
+		startCopy()
 	case tcell.KeyCtrlX:
-		s.handleMultiSelect()
+		handleMultiSelect()
 	case tcell.KeyCtrlA:
-		s.promptCreate()
+		promptCreate()
 	case tcell.KeyEscape, tcell.KeyCtrlC:
-		s.cancelOrQuit()
+		cancelOrQuit()
 	case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
-		s.MoveCursor(1)
+		MoveCursor(1)
 	case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
-		s.MoveCursor(-1)
+		MoveCursor(-1)
 	case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF:
-		s.selectOrToggle()
+		selectOrToggle()
 	case tcell.KeyEnter:
-		s.quitOnPwd()
+		quitOnPwd()
 	// KeyCtrlH is the same code as backspace, and the actual backspace is KeyBackspace2
 	case tcell.KeyCtrlH, tcell.KeyCtrlB:
-		s.upDir()
+		upDir()
 	case tcell.KeyBackspace2:
-		s.backspace(false)
+		backspace(false)
 	case tcell.KeyCtrlW:
-		s.backspace(true)
+		backspace(true)
 	case tcell.KeyCtrlE:
-		s.toggleHome()
+		toggleHome()
 	case tcell.KeyRune:
 		// ~ jumps to the last dir, but only when not mid-search
-		if ev.Rune() == '~' && s.Input == "" {
-			s.togglePrevDir()
+		if ev.Rune() == '~' && Input == "" {
+			togglePrevDir()
 		} else {
-			s.doInput(ev.Rune())
+			doInput(ev.Rune())
 		}
 	}
 }
 
 // copySelectedPath puts the selected entry's full path on the system clipboard
-func (s *State) copySelectedPath() {
-	if p := s.SelectedPath(); p != "" {
+func copySelectedPath() {
+	if p := SelectedPath(); p != "" {
 		screen.SetClipboard([]byte(p))
 	}
 }
 
 // openSelected launches the os's default opener, or runs the file directly if it's executable
-func (s *State) openSelected() {
-	name, ok := s.currentName()
+func openSelected() {
+	name, ok := currentName()
 	if !ok {
 		return
 	}
-	fullPath := path.Join(s.Pwd, name)
-	os.Chdir(s.Pwd)
+	fullPath := path.Join(Pwd, name)
+	os.Chdir(Pwd)
 
 	stat, err := os.Stat(fullPath)
 	isExec := err == nil && stat.Mode()&0o111 != 0
@@ -268,80 +262,80 @@ func (s *State) openSelected() {
 }
 
 // ask for y/n confirmation, then remove selected entry
-func (s *State) promptDelete() {
-	name, ok := s.currentName()
+func promptDelete() {
+	name, ok := currentName()
 	if !ok {
 		return
 	}
-	fullPath := path.Join(s.Pwd, name)
+	fullPath := path.Join(Pwd, name)
 
-	s.OpenPrompt("delete "+name+"? (y/n): ", "", 0, func(input string) {
+	OpenPrompt("delete "+name+"? (y/n): ", "", 0, func(input string) {
 		if strings.ToLower(input) == "y" {
 			os.RemoveAll(fullPath)
-			s.SwitchDir(s.Pwd)
+			SwitchDir(Pwd)
 		}
 	})
 }
 
 // begin inline rename of selected entry
-func (s *State) startRename() {
-	name, ok := s.currentName()
+func startRename() {
+	name, ok := currentName()
 	if !ok {
 		return
 	}
-	s.Edit = editRename
-	s.EditOrig = name
-	s.EditBuf.SetText(name)
+	Edit = editRename
+	EditOrig = name
+	EditBuf.SetText(name)
 }
 
 // begins inline copy of selected entry to new destination
-func (s *State) startCopy() {
-	name, ok := s.currentName()
+func startCopy() {
+	name, ok := currentName()
 	if !ok {
 		return
 	}
-	s.Edit = editCopy
-	s.EditOrig = name
-	s.EditBuf.SetText(name)
+	Edit = editCopy
+	EditOrig = name
+	EditBuf.SetText(name)
 
 	// make room for the edit line below the source
 	vh := height - reservedRows
-	if s.Selected-s.TopIndex >= vh-1 {
-		s.TopIndex++
+	if Selected-TopIndex >= vh-1 {
+		TopIndex++
 	}
 }
 
 // enter selection mode on first press;
 // on the second press it runs a bash command against everything that's been marked
-func (s *State) handleMultiSelect() {
-	if !s.Selecting {
-		name, ok := s.currentName()
+func handleMultiSelect() {
+	if !Selecting {
+		name, ok := currentName()
 		if !ok {
 			return
 		}
-		s.Selecting = true
-		s.Sel = map[string]bool{name: true}
-		s.LastMarked = name
-		s.MoveCursor(1)
+		Selecting = true
+		Sel = map[string]bool{name: true}
+		LastMarked = name
+		MoveCursor(1)
 		return
 	}
 
-	names := s.selectedNames()
+	names := selectedNames()
 	if len(names) == 0 {
-		s.Selecting = false
-		s.Sel = nil
+		Selecting = false
+		Sel = nil
 		return
 	}
 
 	// second C-x will jump back to last marked entry before asking
 	// what 2 run, so you see what youre working with
-	s.jumpTo(s.LastMarked)
+	jumpTo(LastMarked)
 
 	token := braceList(names)
 
 	// prefill " %" and park cursor behind the space,
 	// so typing replaces selection placeholder
-	s.OpenPrompt("bash (%=sel): ", " % ", 0, func(cmd string) {
+	OpenPrompt("bash (%=sel): ", " % ", 0, func(cmd string) {
 		if strings.TrimSpace(cmd) == "" {
 			return
 		}
@@ -352,21 +346,21 @@ func (s *State) handleMultiSelect() {
 			final = final + " " + token
 		}
 		c := exec.Command("bash", "-c", final)
-		c.Dir = s.Pwd
+		c.Dir = Pwd
 		_ = c.Run()
-		s.Selecting = false
-		s.Sel = nil
+		Selecting = false
+		Sel = nil
 	})
 }
 
 // ask for new file/dir name (trailing "/" makes a dir),
 // creating missing parent directories along the way
-func (s *State) promptCreate() {
-	s.OpenPrompt("create: ", "", 0, func(name string) {
+func promptCreate() {
+	OpenPrompt("create: ", "", 0, func(name string) {
 		if name == "" {
 			return
 		}
-		fullPath := path.Join(s.Pwd, name)
+		fullPath := path.Join(Pwd, name)
 		lastDir := fullPath
 		if strings.HasSuffix(name, "/") {
 			os.MkdirAll(fullPath, 0o755)
@@ -378,15 +372,15 @@ func (s *State) promptCreate() {
 				f.Close()
 			}
 		}
-		s.SwitchDir(lastDir)
+		SwitchDir(lastDir)
 	})
 }
 
 // exit multi-select mode, or quit horse entirely
-func (s *State) cancelOrQuit() {
-	if s.Selecting {
-		s.Selecting = false
-		s.Sel = nil
+func cancelOrQuit() {
+	if Selecting {
+		Selecting = false
+		Sel = nil
 		return
 	}
 	kittyClear()
@@ -395,31 +389,31 @@ func (s *State) cancelOrQuit() {
 }
 
 // mark current entry in selection mode, or open/enter it otherwise
-func (s *State) selectOrToggle() {
-	if s.Selecting {
-		s.toggleSelect()
+func selectOrToggle() {
+	if Selecting {
+		toggleSelect()
 		return
 	}
-	if s.Select() != "" {
-		s.quitOnSelect()
+	if Select() != "" {
+		quitOnSelect()
 	}
 }
 
 // jump to $HOME, or to / if we're already there
-func (s *State) toggleHome() {
+func toggleHome() {
 	homeDir, err := os.UserHomeDir()
 	targetDir := homeDir
-	if err != nil || path.Clean(s.Pwd) == path.Clean(homeDir) {
+	if err != nil || path.Clean(Pwd) == path.Clean(homeDir) {
 		targetDir = path.Clean("/")
 	}
-	s.SwitchDir(path.Clean(targetDir))
+	SwitchDir(path.Clean(targetDir))
 }
 
 // quit horse and ask shell to open $EDITOR on selected file
-func (s *State) quitOnSelect() {
+func quitOnSelect() {
 	kittyClear()
 	screen.Fini()
-	selectedPath := s.Select()
+	selectedPath := Select()
 	if selectedPath == "" {
 		os.Exit(0)
 	}
@@ -428,18 +422,18 @@ func (s *State) quitOnSelect() {
 }
 
 // quit horse and ask shell to cd into current directory or selection
-func (s *State) quitOnPwd() {
+func quitOnPwd() {
 	kittyClear()
 	screen.Fini()
 	var p string
-	if s.Input == "" {
-		p = s.Pwd
+	if Input == "" {
+		p = Pwd
 	} else {
-		items := s.CurrentList()
-		if len(items) > 0 && s.Selected < len(items) {
-			p = filepath.Join(s.Pwd, items[s.Selected])
+		items := CurrentList()
+		if len(items) > 0 && Selected < len(items) {
+			p = filepath.Join(Pwd, items[Selected])
 		} else {
-			p = s.Pwd
+			p = Pwd
 		}
 	}
 	fmt.Printf("cd %s\n", escapePath(p))
@@ -611,8 +605,8 @@ type Prompt struct {
 	OnSubmit func(string)
 }
 
-func (s *State) OpenPrompt(label, initial string, cursor int, onSubmit func(string)) {
-	s.ActivePrompt = Prompt{
+func OpenPrompt(label, initial string, cursor int, onSubmit func(string)) {
+	ActivePrompt = Prompt{
 		IsActive: true,
 		Label:    label,
 		Input:    NewLineEditor(initial, cursor),
@@ -620,20 +614,20 @@ func (s *State) OpenPrompt(label, initial string, cursor int, onSubmit func(stri
 	}
 }
 
-func (s *State) HandlePromptInput(ev *tcell.EventKey) {
-	submit, cancel := s.ActivePrompt.Input.HandleKey(ev)
+func HandlePromptInput(ev *tcell.EventKey) {
+	submit, cancel := ActivePrompt.Input.HandleKey(ev)
 	switch {
 	case submit:
-		text := s.ActivePrompt.Input.Text()
-		s.ActivePrompt.OnSubmit(text)
-		s.ActivePrompt.IsActive = false
-		s.SwitchDir(s.Pwd)
+		text := ActivePrompt.Input.Text()
+		ActivePrompt.OnSubmit(text)
+		ActivePrompt.IsActive = false
+		SwitchDir(Pwd)
 		screen.HideCursor()
 	case cancel:
-		s.ActivePrompt.IsActive = false
-		s.Selecting = false
+		ActivePrompt.IsActive = false
+		Selecting = false
 		screen.HideCursor()
-		s.Redraw()
+		Redraw()
 	}
 }
 
@@ -645,13 +639,13 @@ func (s *State) HandlePromptInput(ev *tcell.EventKey) {
 // to the filesystem", so they share one state machine distinguished by Edit
 
 // HandleEditInput feeds a key event to the active inline edit (rename or copy)
-func (s *State) HandleEditInput(ev *tcell.EventKey) {
-	submit, cancel := s.EditBuf.HandleKey(ev)
+func HandleEditInput(ev *tcell.EventKey) {
+	submit, cancel := EditBuf.HandleKey(ev)
 	switch {
 	case submit:
-		s.commitEdit()
+		commitEdit()
 	case cancel:
-		s.Edit = editNone
+		Edit = editNone
 		screen.HideCursor()
 	}
 }
@@ -659,18 +653,18 @@ func (s *State) HandleEditInput(ev *tcell.EventKey) {
 // apply active rename or copy and reselects result
 // leave original untouched if target dir can't be created
 // or underlying fs operation fails
-func (s *State) commitEdit() {
-	kind := s.Edit
-	s.Edit = editNone
+func commitEdit() {
+	kind := Edit
+	Edit = editNone
 	screen.HideCursor()
 
-	name := s.EditBuf.Text()
-	if name == "" || name == s.EditOrig {
+	name := EditBuf.Text()
+	if name == "" || name == EditOrig {
 		return
 	}
 
-	srcPath := path.Join(s.Pwd, s.EditOrig)
-	dstPath := path.Join(s.Pwd, name)
+	srcPath := path.Join(Pwd, EditOrig)
+	dstPath := path.Join(Pwd, name)
 	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil { // lets you move/copy by typing a/b/c
 		return
 	}
@@ -686,21 +680,21 @@ func (s *State) commitEdit() {
 		return
 	}
 
-	s.SwitchDir(s.Pwd)
-	s.selectByName(filepath.Base(name))
+	SwitchDir(Pwd)
+	selectByName(filepath.Base(name))
 }
 
 // put cursor on entry called name in current dir, if present
-func (s *State) selectByName(name string) {
-	for i, f := range s.Files {
+func selectByName(name string) {
+	for i, f := range Files {
 		if f.Name() == name {
-			s.Selected = i
+			Selected = i
 			break
 		}
 	}
 	visibleHeight := height - reservedRows
-	if s.Selected >= visibleHeight {
-		s.TopIndex = s.Selected - visibleHeight + 1
+	if Selected >= visibleHeight {
+		TopIndex = Selected - visibleHeight + 1
 	}
 }
 
@@ -708,34 +702,34 @@ func (s *State) selectByName(name string) {
 // selection //
 ///////////////
 
-func (s *State) toggleSelect() {
-	list := s.CurrentList()
-	if len(list) == 0 || s.Selected >= len(list) {
+func toggleSelect() {
+	list := CurrentList()
+	if len(list) == 0 || Selected >= len(list) {
 		return
 	}
-	if s.Sel == nil {
-		s.Sel = map[string]bool{}
+	if Sel == nil {
+		Sel = map[string]bool{}
 	}
-	name := list[s.Selected]
-	if s.Sel[name] {
-		delete(s.Sel, name)
+	name := list[Selected]
+	if Sel[name] {
+		delete(Sel, name)
 	} else {
-		s.Sel[name] = true
-		s.LastMarked = name
+		Sel[name] = true
+		LastMarked = name
 	}
-	if len(s.Sel) == 0 {
-		s.Selecting = false
-		s.Sel = nil
+	if len(Sel) == 0 {
+		Selecting = false
+		Sel = nil
 		return
 	}
-	s.MoveCursor(1)
+	MoveCursor(1)
 }
 
 // ret marked names in listing order, ignoring any filter
-func (s *State) selectedNames() []string {
+func selectedNames() []string {
 	var out []string
-	for _, f := range s.Files {
-		if s.Sel[f.Name()] {
+	for _, f := range Files {
+		if Sel[f.Name()] {
 			out = append(out, f.Name())
 		}
 	}
@@ -792,36 +786,36 @@ func copyPath(src, dst string) error {
 	return out.Chmod(info.Mode())
 }
 
-func (s *State) SelectedPath() string {
-	name, ok := s.currentName()
+func SelectedPath() string {
+	name, ok := currentName()
 	if !ok {
 		return ""
 	}
-	return path.Join(s.Pwd, name)
+	return path.Join(Pwd, name)
 }
 
-func (s *State) Select() string {
+func Select() string {
 	var list []os.DirEntry
-	if len(s.Results) > 0 {
-		list = s.Results
+	if len(Results) > 0 {
+		list = Results
 	} else {
-		list = s.Files
+		list = Files
 	}
 
 	if len(list) == 0 {
 		return ""
 	}
 
-	selected := list[s.Selected]
+	selected := list[Selected]
 
-	if isDirEntry(path.Join(s.Pwd, selected.Name()), selected) {
-		s.SwitchDir(path.Join(s.Pwd, selected.Name()))
+	if isDirEntry(path.Join(Pwd, selected.Name()), selected) {
+		SwitchDir(path.Join(Pwd, selected.Name()))
 		return ""
 	}
-	return path.Join(s.Pwd, selected.Name())
+	return path.Join(Pwd, selected.Name())
 }
 
-func (s *State) SwitchDir(where string) error {
+func SwitchDir(where string) error {
 	if where == "" {
 		return fmt.Errorf("cannot switch to empty directory")
 	}
@@ -832,11 +826,11 @@ func (s *State) SwitchDir(where string) error {
 	}
 
 	// remember where the cursor was in the dir we're leaving
-	if s.LastSel == nil {
-		s.LastSel = make(map[string]string)
+	if LastSel == nil {
+		LastSel = make(map[string]string)
 	}
-	if list := s.CurrentList(); len(list) > 0 && s.Selected < len(list) {
-		s.LastSel[s.Pwd] = list[s.Selected]
+	if list := CurrentList(); len(list) > 0 && Selected < len(list) {
+		LastSel[Pwd] = list[Selected]
 	}
 
 	// read first so a dir we cant open doesnt leave us in a broken state
@@ -847,29 +841,29 @@ func (s *State) SwitchDir(where string) error {
 	}
 
 	// remember the dir we came from so ~ can jump back
-	if s.Pwd != "" && s.Pwd != newPwd {
-		s.PrevDir = s.Pwd
+	if Pwd != "" && Pwd != newPwd {
+		PrevDir = Pwd
 	}
 
-	s.Pwd = newPwd
-	s.Files = files
-	s.Input = ""
-	s.Selected = 0
-	s.TopIndex = 0
-	s.Results = nil
-	s.invalidateList()
+	Pwd = newPwd
+	Files = files
+	Input = ""
+	Selected = 0
+	TopIndex = 0
+	Results = nil
+	invalidateList()
 
 	// retain the last selection when coming back to this dir
-	if name, ok := s.LastSel[s.Pwd]; ok {
+	if name, ok := LastSel[Pwd]; ok {
 		for i, f := range files {
 			if f.Name() == name {
-				s.Selected = i
+				Selected = i
 				break
 			}
 		}
 		visibleHeight := height - reservedRows
-		if s.Selected >= visibleHeight {
-			s.TopIndex = s.Selected - visibleHeight + 1
+		if Selected >= visibleHeight {
+			TopIndex = Selected - visibleHeight + 1
 		}
 	}
 	return nil
@@ -910,19 +904,19 @@ type kittyCacheEntry struct {
 var kittyCache = map[string]kittyCacheEntry{}
 
 // previewImagePath returns the selected file if it's an image we can show, else ""
-func (s *State) previewImagePath() string {
+func previewImagePath() string {
 	if !kittyOK || !showPreview {
 		return ""
 	}
-	files := s.Files
-	if len(s.Results) > 0 {
-		files = s.Results
+	files := Files
+	if len(Results) > 0 {
+		files = Results
 	}
-	if len(files) == 0 || s.Selected < 0 || s.Selected >= len(files) {
+	if len(files) == 0 || Selected < 0 || Selected >= len(files) {
 		return ""
 	}
-	entry := files[s.Selected]
-	full := path.Join(s.Pwd, entry.Name())
+	entry := files[Selected]
+	full := path.Join(Pwd, entry.Name())
 	if isDirEntry(full, entry) {
 		return ""
 	}
@@ -944,14 +938,14 @@ func (s *State) previewImagePath() string {
 }
 
 // reconcileKitty draws want in the preview pane, or clears it, only when it changes
-func (s *State) reconcileKitty(want string) {
-	if !kittyOK || want == s.KittyShown {
+func reconcileKitty(want string) {
+	if !kittyOK || want == KittyShown {
 		return
 	}
-	if s.KittyShown != "" {
+	if KittyShown != "" {
 		kittyClear()
 	}
-	s.KittyShown = ""
+	KittyShown = ""
 	if want == "" {
 		return
 	}
@@ -979,7 +973,7 @@ func (s *State) reconcileKitty(want string) {
 	}
 
 	kittyPlace(data, width/2+1, 1, c, r)
-	s.KittyShown = want
+	KittyShown = want
 }
 
 // ret: png bytes of want resized to fit a c x r cell placement
@@ -1096,9 +1090,9 @@ func wrapTmux(seq string) string {
 func kittyClear() {
 	if !kittyOK || ttyFile == nil {
 		return
+	} else {
+		fmt.Fprint(ttyFile, wrapTmux(kgp.DeleteAllFree().Encode()))
 	}
-	// same wire bytes as before (a=d,d=A): delete all placements and free data
-	fmt.Fprint(ttyFile, wrapTmux(kgp.DeleteAllFree().Encode()))
 }
 
 // kittyPlace transmits a png and displays it, scaled into cols x rows cells at (col,row)
@@ -1136,24 +1130,24 @@ func kittyPlace(png []byte, col, row, cols, rows int) {
 // rendering //
 ///////////////
 
-func (state *State) Redraw() {
-	wantImg := state.previewImagePath()
-	defer state.reconcileKitty(wantImg) // emit after tcell has flushed, so it lands on top
+func Redraw() {
+	wantImg := previewImagePath()
+	defer reconcileKitty(wantImg) // emit after tcell has flushed, so it lands on top
 	screen.Clear()
 
-	files := state.Files
-	if len(state.Results) > 0 {
-		files = state.Results
+	files := Files
+	if len(Results) > 0 {
+		files = Results
 	}
 
 	if len(files) == 0 {
-		state.DrawFiles()
+		DrawFiles()
 		screen.Show()
 		return
 	}
 
-	selectedEntry := files[state.Selected]
-	fullPath := path.Join(state.Pwd, selectedEntry.Name())
+	selectedEntry := files[Selected]
+	fullPath := path.Join(Pwd, selectedEntry.Name())
 
 	if showPreview && wantImg == "" {
 		if isDirEntry(fullPath, selectedEntry) {
@@ -1166,19 +1160,19 @@ func (state *State) Redraw() {
 
 			// dont do for 50kB+
 			if err != nil || info.Size() > maxTextPreviewSize {
-				state.DrawFiles()
+				DrawFiles()
 				drawWarning("*file too large (or cant be opened)*")
 				return
 			}
 			if info.Size() == 0 {
-				state.DrawFiles()
+				DrawFiles()
 				drawWarning("*file empty*")
 				return
 			}
 
 			file, err := os.Open(fullPath)
 			if err != nil {
-				state.DrawFiles()
+				DrawFiles()
 				drawWarning("*file cant be opened*")
 				return
 			}
@@ -1198,7 +1192,7 @@ func (state *State) Redraw() {
 			}
 		}
 	}
-	state.DrawFiles()
+	DrawFiles()
 	screen.Show()
 }
 
@@ -1272,25 +1266,25 @@ func DrawDirPreview(fullPath string, x1, y1, x2, y2 int) {
 	}
 }
 
-func (state *State) DrawFiles() {
-	filesToShow := state.CurrentList()
+func DrawFiles() {
+	filesToShow := CurrentList()
 
-	pwdLen := len(state.Pwd) + 1
-	drawText(1, 1, pwdLen, 1, STYLE_BG, state.Pwd)
+	pwdLen := len(Pwd) + 1
+	drawText(1, 1, pwdLen, 1, STYLE_BG, Pwd)
 
-	if len(filesToShow) > 0 && state.Selected < len(filesToShow) {
-		drawText(pwdLen, 1, 999, 1, STYLE_MID, filesToShow[state.Selected])
+	if len(filesToShow) > 0 && Selected < len(filesToShow) {
+		drawText(pwdLen, 1, 999, 1, STYLE_MID, filesToShow[Selected])
 	}
 
-	drawText(pwdLen, 1, 999, 1, STYLE_BG, state.Input)
+	drawText(pwdLen, 1, 999, 1, STYLE_BG, Input)
 
 	// one slot, top-left above the input row: file position in normal
 	// mode, selection count in selection mode
-	if state.Selecting {
-		selInfo := fmt.Sprintf("[%d/%d] selected", len(state.Sel), len(filesToShow))
+	if Selecting {
+		selInfo := fmt.Sprintf("[%d/%d] selected", len(Sel), len(filesToShow))
 		drawText(1, 0, 999, 0, STYLE_DIR, selInfo)
 	} else {
-		scrollInfo := fmt.Sprintf("[%d/%d]", state.Selected+1, len(filesToShow))
+		scrollInfo := fmt.Sprintf("[%d/%d]", Selected+1, len(filesToShow))
 		drawText(1, 0, 999, 0, STYLE_MID, scrollInfo)
 	}
 
@@ -1300,11 +1294,11 @@ func (state *State) DrawFiles() {
 		return
 	}
 
-	state.Selected = min(state.Selected, len(filesToShow)-1)
-	state.TopIndex = min(state.TopIndex, state.Selected)
+	Selected = min(Selected, len(filesToShow)-1)
+	TopIndex = min(TopIndex, Selected)
 
 	visibleHeight := height - reservedRows
-	start := state.TopIndex
+	start := TopIndex
 	end := min(start+visibleHeight, len(filesToShow))
 
 	copyShift := 0
@@ -1316,59 +1310,59 @@ func (state *State) DrawFiles() {
 		name := filesToShow[i]
 
 		// inline rename editor on the selected row
-		if state.Edit == editRename && state.Selected == i {
+		if Edit == editRename && Selected == i {
 			for x := 1; x <= editMaxX; x++ {
 				screen.SetContent(x, y, ' ', nil, STYLE_BG)
 			}
-			drawLineEditor(1, y, editMaxX, STYLE_FG, &state.EditBuf)
+			drawLineEditor(1, y, editMaxX, STYLE_FG, &EditBuf)
 			continue
 		}
 
 		style := STYLE_BG
 
 		isDir := false
-		if len(state.Results) > 0 {
-			if i < len(state.Results) {
-				fullPath := path.Join(state.Pwd, state.Results[i].Name())
-				isDir = isDirEntry(fullPath, state.Results[i])
+		if len(Results) > 0 {
+			if i < len(Results) {
+				fullPath := path.Join(Pwd, Results[i].Name())
+				isDir = isDirEntry(fullPath, Results[i])
 			}
-		} else if i < len(state.Files) {
-			fullPath := path.Join(state.Pwd, state.Files[i].Name())
-			isDir = isDirEntry(fullPath, state.Files[i])
+		} else if i < len(Files) {
+			fullPath := path.Join(Pwd, Files[i].Name())
+			isDir = isDirEntry(fullPath, Files[i])
 		}
 
-		if state.Selected == i {
+		if Selected == i {
 			style = STYLE_FG
 		}
 		if isDir {
 			style = STYLE_DIR
-			if state.Selected == i {
+			if Selected == i {
 				style = STYLE_DIR_SEL
 			}
 			name += "/"
 		}
 
 		// mark selected files with a * in the left gutter
-		if state.Selecting && state.Sel[filesToShow[i]] {
+		if Selecting && Sel[filesToShow[i]] {
 			screen.SetContent(0, y, '*', nil, STYLE_FG)
 		}
 
 		drawText(1, y, 999, y, style, name)
 
 		// on copy, edit the destination path on a new line below the source
-		if state.Edit == editCopy && state.Selected == i {
+		if Edit == editCopy && Selected == i {
 			ey := y + 1
 			for x := 1; x <= editMaxX; x++ {
 				screen.SetContent(x, ey, ' ', nil, STYLE_BG)
 			}
-			drawLineEditor(1, ey, editMaxX, STYLE_FG, &state.EditBuf)
+			drawLineEditor(1, ey, editMaxX, STYLE_FG, &EditBuf)
 			copyShift = 1
 		}
 	}
 
-	if state.ActivePrompt.IsActive {
-		input := state.ActivePrompt.Input.Text()
-		label := state.ActivePrompt.Label
+	if ActivePrompt.IsActive {
+		input := ActivePrompt.Input.Text()
+		label := ActivePrompt.Label
 
 		for i := 0; i < width; i++ {
 			screen.SetContent(i, 1, ' ', nil, STYLE_BG)
@@ -1394,7 +1388,7 @@ func (state *State) DrawFiles() {
 			drawText(currentX, 1, width-1, 1, STYLE_BG, input)
 		}
 
-		screen.ShowCursor(len(label)+runewidth.StringWidth(state.ActivePrompt.Input.TextBeforeCursor())+1, 1)
+		screen.ShowCursor(len(label)+runewidth.StringWidth(ActivePrompt.Input.TextBeforeCursor())+1, 1)
 	}
 }
 
@@ -1442,68 +1436,68 @@ func drawText(x1, y1, x2, y2 int, style tcell.Style, text string) {
 // input & ux //
 ////////////////
 
-func (s *State) togglePrevDir() {
-	if s.PrevDir == "" {
+func togglePrevDir() {
+	if PrevDir == "" {
 		return
 	}
-	s.SwitchDir(s.PrevDir)
+	SwitchDir(PrevDir)
 }
 
-func (s *State) upDir() {
-	splitPwd := strings.Split(strings.TrimSuffix(s.Pwd, "/"), "/")
+func upDir() {
+	splitPwd := strings.Split(strings.TrimSuffix(Pwd, "/"), "/")
 	if len(splitPwd) > 1 {
 		newPwd := strings.Join(splitPwd[:len(splitPwd)-1], "/")
-		s.SwitchDir(fmt.Sprint("/", newPwd))
+		SwitchDir(fmt.Sprint("/", newPwd))
 	}
 }
 
-func (s *State) backspace(fullWord bool) {
-	if len(s.Input) < 1 {
-		s.upDir()
+func backspace(fullWord bool) {
+	if len(Input) < 1 {
+		upDir()
 		return
 	}
 
-	modified := s.Input[:len(s.Input)-1]
+	modified := Input[:len(Input)-1]
 	if fullWord {
-		fields := strings.Fields(s.Input)
+		fields := strings.Fields(Input)
 		if len(fields) > 0 {
 			fields = fields[:len(fields)-1]
 		}
 		modified = strings.Join(fields, " ")
 	}
 
-	results := s.search(modified)
-	s.Input = modified
+	results := search(modified)
+	Input = modified
 	if len(results) == 0 {
-		s.Results = nil
+		Results = nil
 	} else {
-		s.Results = results
+		Results = results
 	}
-	s.invalidateList()
-	s.Selected = 0
-	s.TopIndex = 0
+	invalidateList()
+	Selected = 0
+	TopIndex = 0
 }
 
-func (s *State) doInput(r rune) {
-	if len(s.Input) >= maxInputLength {
+func doInput(r rune) {
+	if len(Input) >= maxInputLength {
 		return
 	}
 
-	modified := s.Input + string(r)
-	results := s.search(modified)
+	modified := Input + string(r)
+	results := search(modified)
 
 	if len(results) == 0 {
 		return
 	}
 
-	s.Input = modified
-	s.Results = results
-	s.invalidateList()
-	s.Selected = 0
-	s.TopIndex = 0
+	Input = modified
+	Results = results
+	invalidateList()
+	Selected = 0
+	TopIndex = 0
 }
 
-func (s *State) search(query string) []os.DirEntry {
+func search(query string) []os.DirEntry {
 	if query == "" {
 		return nil
 	}
@@ -1511,7 +1505,7 @@ func (s *State) search(query string) []os.DirEntry {
 	var matches []os.DirEntry
 	queryLower := strings.ToLower(query)
 
-	for _, f := range s.Files {
+	for _, f := range Files {
 		name := f.Name()
 		nameLower := strings.ToLower(name)
 
@@ -1553,67 +1547,67 @@ func (s *State) search(query string) []os.DirEntry {
 // return visible entry names, so active search results, or
 // the full directory listing when there's no search. cached until
 // underlying Files/Results change (see invalidateList)
-func (s *State) CurrentList() []string {
-	if s.listCache != nil {
-		return s.listCache
+func CurrentList() []string {
+	if listCache != nil {
+		return listCache
 	}
-	src := s.Files
-	if len(s.Results) > 0 {
-		src = s.Results
+	src := Files
+	if len(Results) > 0 {
+		src = Results
 	}
 	names := make([]string, len(src))
 	for i, f := range src {
 		names[i] = f.Name()
 	}
-	s.listCache = names
+	listCache = names
 	return names
 }
 
 // drops memoized CurrentList() result
 // call after reassigning Files or Results
-func (s *State) invalidateList() {
-	s.listCache = nil
+func invalidateList() {
+	listCache = nil
 }
 
 // ret name of selected entry in active list, and
 // whether one exists. shared guard against empty or out-of-range selection
-func (s *State) currentName() (string, bool) {
-	list := s.CurrentList()
-	if len(list) == 0 || s.Selected >= len(list) {
+func currentName() (string, bool) {
+	list := CurrentList()
+	if len(list) == 0 || Selected >= len(list) {
 		return "", false
 	}
-	return list[s.Selected], true
+	return list[Selected], true
 }
 
-func (s *State) MoveCursor(n int) {
-	list := s.CurrentList()
+func MoveCursor(n int) {
+	list := CurrentList()
 	if len(list) == 0 {
 		return
 	}
 
-	s.Selected += n
-	if s.Selected < 0 {
-		s.Selected = len(list) - 1
-	} else if s.Selected >= len(list) {
-		s.Selected = 0
+	Selected += n
+	if Selected < 0 {
+		Selected = len(list) - 1
+	} else if Selected >= len(list) {
+		Selected = 0
 	}
 
 	// keep the selection inside the visible window
 	visibleHeight := height - reservedRows
-	s.TopIndex = min(s.TopIndex, s.Selected)
-	s.TopIndex = max(s.TopIndex, s.Selected-visibleHeight+1)
+	TopIndex = min(TopIndex, Selected)
+	TopIndex = max(TopIndex, Selected-visibleHeight+1)
 }
 
 // put cursor on named entry and scroll it into view
 // unknown names are ignored
-func (s *State) jumpTo(name string) {
-	list := s.CurrentList()
+func jumpTo(name string) {
+	list := CurrentList()
 	for i, n := range list {
 		if n == name {
-			s.Selected = i
+			Selected = i
 			visibleHeight := height - reservedRows
-			s.TopIndex = min(s.TopIndex, s.Selected)
-			s.TopIndex = max(s.TopIndex, s.Selected-visibleHeight+1)
+			TopIndex = min(TopIndex, Selected)
+			TopIndex = max(TopIndex, Selected-visibleHeight+1)
 			return
 		}
 	}
