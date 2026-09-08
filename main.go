@@ -341,7 +341,7 @@ func (s *State) handleMultiSelect() {
 
 	// prefill " %" and park cursor behind the space,
 	// so typing replaces selection placeholder
-	s.OpenPrompt("bash (%=selection): ", " %", 0, func(cmd string) {
+	s.OpenPrompt("bash (%=sel): ", " % ", 0, func(cmd string) {
 		if strings.TrimSpace(cmd) == "" {
 			return
 		}
