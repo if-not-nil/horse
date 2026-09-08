@@ -27,3 +27,30 @@ func TestCreateNewFileDoesNotTruncateExistingFile(t *testing.T) {
 		t.Fatalf("file changed: got %q, want %q", got, original)
 	}
 }
+
+func TestCopyPathDoesNotOverwriteExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.txt")
+	dst := filepath.Join(dir, "destination.txt")
+
+	if err := os.WriteFile(src, []byte("new content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(dst, []byte("keep this"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyPath(src, dst); err == nil {
+		t.Fatal("expected copying to an existing destination to fail")
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(got) != "keep this" {
+		t.Fatalf("destination changed: got %q", got)
+	}
+}

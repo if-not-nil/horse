@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -758,6 +759,11 @@ func braceList(names []string) string {
 func copyPath(src, dst string) error {
 	info, err := os.Stat(src)
 	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("destination already exists: %s", dst)
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if info.IsDir() {
