@@ -19,7 +19,7 @@ alias h='eval "$(horse)"'
 - try going to a folder and pressing enter  
 - try doing `Down`, `Up`, `<C-n>`, `<C-p>`, `<C-j>`, `<C-k>`
 - try doing `<C-c>` and see how its different from `Enter`
-- try selecting an image, it previews inline if your terminal speaks the kitty graphics protocol (kitty, ghostty, wezterm)
+- try selecting an image, it previews inline if your terminal speaks the kitty graphics protocol (kitty, ghostty, wezterm) or sixel (foot, xterm, mlterm, ...); set HORSE_SIXEL=1/0 to force sixel on/off
 
 **`keymap**
 

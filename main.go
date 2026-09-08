@@ -25,13 +25,16 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/SerenaFontaine/kgp"
 	"github.com/gdamore/tcell/v2"
 	"github.com/lithammer/fuzzysearch/fuzzy"
 	"github.com/mattn/go-runewidth"
+	"github.com/mattn/go-sixel"
 	"golang.org/x/image/draw"
 	"golang.org/x/sys/unix"
+	xterm "golang.org/x/term"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -43,6 +46,9 @@ func main() {
 	flag.BoolVar(&showPreview, "preview", true, "show a file preview on the right side")
 	flag.BoolVar(&showPreview, "p", true, "alias for -preview")
 	flag.Parse()
+
+	// probe for sixel before tcell grabs the terminal (it needs a raw-mode query)
+	sixelOK = detectSixel()
 
 	s, err := tcell.NewScreen()
 	if err != nil {
@@ -66,6 +72,9 @@ func main() {
 		// but forwards kitty graphics if `set -g allow-passthrough on` is set
 		// everyone has this enabled already
 		inTmux)
+	if kittyOK {
+		sixelOK = false // kitty is nicer, prefer it when we have both
+	}
 
 	screen.SetStyle(STYLE_BG)
 
@@ -92,6 +101,7 @@ func main() {
 				kittyClear()
 				KittyShown = ""
 			}
+			SixelShown = "" // sixel is erased by the Sync repaint below
 			screen.Sync()
 			Redraw()
 		case *tcell.EventKey:
@@ -132,6 +142,7 @@ var (
 	HL_STYLE      *chroma.Style = styles.Get("monokai")
 	screen        tcell.Screen
 	kittyOK       = false                   // terminal speaks the kitty graphics protocol
+	sixelOK       = false                   // terminal speaks sixel (fallback when no kitty)
 	inTmux        = os.Getenv("TMUX") != "" // /dev/tty is tmux's pty, not the real terminal
 	ttyFile       *os.File                  // where we write kitty escapes (stdout is eval'd)
 
@@ -155,6 +166,7 @@ var (
 	LastMarked string          // most recently marked name for C-x to jump back to
 
 	KittyShown string // path of the image currently drawn via kitty (for caching)
+	SixelShown string // path of the image currently drawn via sixel (for caching)
 
 	ActivePrompt Prompt
 )
@@ -905,7 +917,7 @@ var kittyCache = map[string]kittyCacheEntry{}
 
 // previewImagePath returns the selected file if it's an image we can show, else ""
 func previewImagePath() string {
-	if !kittyOK || !showPreview {
+	if (!kittyOK && !sixelOK) || !showPreview {
 		return ""
 	}
 	files := Files
@@ -1126,13 +1138,160 @@ func kittyPlace(png []byte, col, row, cols, rows int) {
 	w.Flush()
 }
 
+///////////////////
+// sixel fallback //
+///////////////////
+
+// reconcileImage picks the graphics protocol: kitty if we have it, else sixel
+func reconcileImage(want string) {
+	switch {
+	case kittyOK:
+		reconcileKitty(want)
+	case sixelOK:
+		reconcileSixel(want)
+	}
+}
+
+// reconcileSixel draws want in the preview pane, or clears it, only when it changes.
+// unlike kitty theres no delete command: the pixels live in cells tcell doesnt track,
+// so we force a full repaint to paint over the old one
+func reconcileSixel(want string) {
+	if want == SixelShown {
+		return
+	}
+	if SixelShown != "" {
+		screen.Sync() // repaint every cell so the old image gets covered
+	}
+	SixelShown = ""
+	if want == "" {
+		return
+	}
+
+	data, err := os.ReadFile(want)
+	if err != nil {
+		return
+	}
+
+	cols := width - width/2 - 1
+	rows := height - 1
+	if cols < 1 || rows < 1 {
+		return
+	}
+
+	cw, ch := cellSize()
+	img, err := scaleToFit(data, cols*cw, rows*ch)
+	if err != nil {
+		return
+	}
+	sixelPlace(img, width/2+1, 1)
+	SixelShown = want
+}
+
+// scaleToFit decodes data and downscales it into tw x th pixels, keeping aspect.
+// sixel needs real pixels; the terminal wont scale it for us like kitty does
+func scaleToFit(data []byte, tw, th int) (image.Image, error) {
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	b := src.Bounds()
+	scale := math.Min(float64(tw)/float64(b.Dx()), float64(th)/float64(b.Dy()))
+	if scale > 1 {
+		scale = 1 // dont blow small images up
+	}
+	if scale <= 0 {
+		return nil, fmt.Errorf("bad placement size")
+	}
+	dw := max(int(math.Round(float64(b.Dx())*scale)), 1)
+	dh := max(int(math.Round(float64(b.Dy())*scale)), 1)
+	dst := image.NewNRGBA(image.Rect(0, 0, dw, dh))
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, b, draw.Over, nil)
+	return dst, nil
+}
+
+// sixelPlace encodes img to sixel and paints it at (col,row), 1-based
+func sixelPlace(img image.Image, col, row int) {
+	if ttyFile == nil {
+		return
+	}
+	var buf bytes.Buffer
+	if err := sixel.NewEncoder(&buf).Encode(img); err != nil {
+		return
+	}
+	// one buffered flush, like kittyPlace
+	w := bufio.NewWriter(ttyFile)
+	fmt.Fprintf(w, "\x1b[%d;%dH", row, col)
+	w.WriteString(wrapTmux(buf.String()))
+	w.Flush()
+}
+
+// detectSixel asks the terminal (before tcell starts) whether it does sixel, via a
+// primary device-attributes query (CSI c): attribute 4 in the reply means yes.
+// HORSE_SIXEL=1/0 forces it on/off and skips the probe.
+func detectSixel() bool {
+	switch os.Getenv("HORSE_SIXEL") {
+	case "1", "true":
+		return true
+	case "0", "false":
+		return false
+	}
+
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	defer tty.Close()
+
+	fd := int(tty.Fd())
+	old, err := xterm.MakeRaw(fd)
+	if err != nil {
+		return false
+	}
+	defer xterm.Restore(fd, old)
+
+	if _, err := tty.WriteString("\x1b[c"); err != nil {
+		return false
+	}
+
+	// read the reply off-thread so a silent terminal cant hang us;
+	// the deferred Close unblocks the Read when we bail on the timeout
+	reply := make(chan string, 1)
+	go func() {
+		var acc []byte
+		buf := make([]byte, 64)
+		for {
+			n, err := tty.Read(buf)
+			acc = append(acc, buf[:n]...)
+			if bytes.IndexByte(acc, 'c') >= 0 || err != nil {
+				break
+			}
+		}
+		reply <- string(acc)
+	}()
+
+	var resp string
+	select {
+	case resp = <-reply:
+	case <-time.After(300 * time.Millisecond):
+		return false
+	}
+
+	// reply is like ESC [ ? 62 ; 4 ; ... c  -- a 4 param means sixel
+	for _, field := range strings.Split(resp, ";") {
+		if strings.TrimRight(field, "c") == "4" {
+			return true
+		}
+	}
+	return false
+}
+
 ///////////////
 // rendering //
 ///////////////
 
 func Redraw() {
 	wantImg := previewImagePath()
-	defer reconcileKitty(wantImg) // emit after tcell has flushed, so it lands on top
+	defer reconcileImage(wantImg) // emit after tcell has flushed, so it lands on top
 	screen.Clear()
 
 	files := Files
