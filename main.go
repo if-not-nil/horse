@@ -1302,12 +1302,10 @@ func DrawFiles() {
 
 	if len(filesToShow) == 0 {
 		drawText(1, 2, 999, 3, STYLE_MID, "*nothing here*")
-		screen.Show()
-		return
+	} else {
+		Selected = min(Selected, len(filesToShow)-1)
+		TopIndex = min(TopIndex, Selected)
 	}
-
-	Selected = min(Selected, len(filesToShow)-1)
-	TopIndex = min(TopIndex, Selected)
 
 	visibleHeight := height - reservedRows
 	start := TopIndex
