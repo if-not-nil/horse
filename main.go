@@ -122,19 +122,20 @@ const (
 )
 
 var (
-	width                       = 20
-	height                      = 20
-	STYLE_BG                    = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
-	STYLE_DIR                   = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorDarkCyan)
-	STYLE_DIR_SEL               = tcell.StyleDefault.Background(tcell.ColorDarkCyan).Foreground(tcell.ColorWhite)
-	STYLE_FG                    = tcell.StyleDefault.Background(tcell.ColorWhite).Foreground(tcell.ColorBlack)
-	STYLE_MID                   = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
-	showPreview                 = false
-	HL_STYLE      *chroma.Style = styles.Get("monokai")
-	screen        tcell.Screen
-	kittyOK       = false                   // terminal speaks the kitty graphics protocol
-	inTmux        = os.Getenv("TMUX") != "" // /dev/tty is tmux's pty, not the real terminal
-	ttyFile       *os.File                  // where we write kitty escapes (stdout is eval'd)
+	width                         = 20
+	height                        = 20
+	STYLE_BG                      = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
+	STYLE_DIR                     = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorDarkCyan)
+	STYLE_DIR_SEL                 = tcell.StyleDefault.Background(tcell.ColorDarkCyan).Foreground(tcell.ColorWhite)
+	STYLE_FG                      = tcell.StyleDefault.Background(tcell.ColorWhite).Foreground(tcell.ColorBlack)
+	STYLE_MID                     = tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorGrey)
+	showPreview                   = false
+	showHiddenFiles               = true
+	HL_STYLE        *chroma.Style = styles.Get("monokai")
+	screen          tcell.Screen
+	kittyOK         = false                   // terminal speaks the kitty graphics protocol
+	inTmux          = os.Getenv("TMUX") != "" // /dev/tty is tmux's pty, not the real terminal
+	ttyFile         *os.File                  // where we write kitty escapes (stdout is eval'd)
 
 	Pwd       string
 	Input     string
@@ -210,8 +211,11 @@ func HandleKey(ev *tcell.EventKey) {
 	case tcell.KeyCtrlE:
 		toggleHome()
 	case tcell.KeyRune:
-		// ~ jumps to the last dir, but only when not mid-search
-		if ev.Rune() == '~' && Input == "" {
+		// . toggles hidden files
+		if ev.Rune() == '.' && Input == "" {
+			toggleHiddenFiles()
+		} else if ev.Rune() == '~' && Input == "" {
+			// ~ jumps to the last dir, but only when not mid-search
 			togglePrevDir()
 		} else {
 			doInput(ev.Rune())
@@ -852,6 +856,8 @@ func SwitchDir(where string) error {
 		return fmt.Errorf("failed to read directory %s: %w", newPwd, err)
 	}
 
+	files = filterHidden(files)
+
 	// remember the dir we came from so ~ can jump back
 	if Pwd != "" && Pwd != newPwd {
 		PrevDir = Pwd
@@ -899,6 +905,20 @@ func isDirEntry(path string, entry os.DirEntry) bool {
 		}
 	}
 	return false
+}
+
+func filterHidden(entries []os.DirEntry) []os.DirEntry {
+	if showHiddenFiles {
+		return entries
+	}
+
+	visible := make([]os.DirEntry, 0, len(entries))
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".") {
+			visible = append(visible, entry)
+		}
+	}
+	return visible
 }
 
 ///////////////////////////
@@ -1265,6 +1285,8 @@ func DrawDirPreview(fullPath string, x1, y1, x2, y2 int) {
 		return
 	}
 
+	dirEntries = filterHidden(dirEntries)
+
 	for y, entry := range dirEntries {
 		isDir := isDirEntry(path.Join(fullPath, entry.Name()), entry)
 		if isDir {
@@ -1451,6 +1473,11 @@ func togglePrevDir() {
 		return
 	}
 	SwitchDir(PrevDir)
+}
+
+func toggleHiddenFiles() {
+	showHiddenFiles = !showHiddenFiles
+	_ = SwitchDir(Pwd)
 }
 
 func upDir() {
