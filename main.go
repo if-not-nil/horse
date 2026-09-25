@@ -210,11 +210,10 @@ func HandleKey(ev *tcell.EventKey) {
 		backspace(true)
 	case tcell.KeyCtrlE:
 		toggleHome()
+	case tcell.KeyCtrlV:
+		toggleHiddenFiles()
 	case tcell.KeyRune:
-		// . toggles hidden files
-		if ev.Rune() == '.' && Input == "" {
-			toggleHiddenFiles()
-		} else if ev.Rune() == '~' && Input == "" {
+		if ev.Rune() == '~' && Input == "" {
 			// ~ jumps to the last dir, but only when not mid-search
 			togglePrevDir()
 		} else {
