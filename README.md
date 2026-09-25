@@ -48,6 +48,12 @@ C-x:
     selection mode: marks the current file. Tab marks/unmarks more,
     C-x again runs a bash command on them (% = the files, e.g. `cp % ./`;
     if there's no %, they're appended). Escape cancels
+C-o[pen]:
+    open the selected file with the default application
+C-d[elete]:
+    delete the selected file or directory
+C-v[isibility]:
+    toggle the visibility of hidden files
 Left, C-h, C-b:
     go up a directory
 Tab, Right, C-l, C-f:
