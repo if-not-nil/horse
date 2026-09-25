@@ -39,15 +39,15 @@ C-a:
 C-s:
     copy the selected item's path
 C-r:
-    rename the selected item inline. type a path (a/b/c) to move it
-    (Enter to confirm, Escape to cancel)
+    rename the selected item inline
+    type a path (a/b/c) to move it
 C-y:
-    copy the selected file/dir. the destination is edited on a line below
-    the source; type a path (a/b/c) to copy elsewhere (Enter/Escape)
+    copy the selected file/dir
 C-x:
-    selection mode: marks the current file. Tab marks/unmarks more,
-    C-x again runs a bash command on them (% = the files, e.g. `cp % ./`;
-    if there's no %, they're appended). Escape cancels
+    start selection, mark current file
+
+    when selecting, run a bash command on the selection
+    in it, the % placeholder will be substituted for the selection like {file1,file2}
 C-o[pen]:
     open the selected file with the default application
 C-d[elete]:
@@ -68,9 +68,8 @@ Backspace:
 
 **`flags**
 ```
-  -p	alias for -preview (default true)
-  -preview
-    	show a file preview on the right side (default true)
+  -p[review]=true
+     show a file preview on the right side (default true)
 ```
 
 **`todo**
