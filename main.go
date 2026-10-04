@@ -43,7 +43,10 @@ import (
 func main() {
 	flag.BoolVar(&showPreview, "preview", true, "show a file preview on the right side")
 	flag.BoolVar(&showPreview, "p", true, "alias for -preview")
+	flag.StringVar(&colorOverride, "color", "", "truecolor, 256 or 16 (default guesses)")
+	flag.StringVar(&colorOverride, "c", "", "alias for -color")
 	flag.Parse()
+	previewColor = detectColorMode(colorOverride)
 
 	s, err := tcell.NewScreen()
 	if err != nil {
@@ -1157,6 +1160,128 @@ func kittyPlace(png []byte, col, row, cols, rows int) {
 	w.Flush()
 }
 
+///////////////////
+// preview color //
+///////////////////
+
+type colorMode int
+
+const (
+	modeRGB colorMode = iota
+	mode256
+	mode16
+)
+
+var (
+	previewColor  = modeRGB
+	colorOverride string
+	palette256    = buildPalette(256)
+	palette16     = buildPalette(16)
+	colorCache    = map[colorKey]tcell.Color{}
+)
+
+type colorKey struct {
+	mode    colorMode
+	r, g, b int32
+}
+
+func buildPalette(n int) []tcell.Color {
+	palette := make([]tcell.Color, n)
+	for i := range palette {
+		palette[i] = tcell.PaletteColor(i)
+	}
+	return palette
+}
+
+func detectColorMode(override string) colorMode {
+	switch strings.ToLower(override) {
+	case "truecolor", "24bit", "rgb":
+		return modeRGB
+	case "256":
+		return mode256
+	case "8", "16":
+		return mode16
+	case "":
+	default:
+		log.Printf("unknown -color %q, guessing from $TERM", override)
+	}
+
+	// tcell refuses truecolor when told to and knows the palette size,
+	// so let it do the downgrading instead of doubling up on it
+	if os.Getenv("TCELL_TRUECOLOR") == "disable" {
+		return modeRGB
+	}
+
+	switch os.Getenv("COLORTERM") {
+	case "truecolor", "24bit":
+		return modeRGB
+	case "256":
+		return mode256
+	}
+
+	term := os.Getenv("TERM")
+	switch {
+	case strings.Contains(term, "direct"), strings.Contains(term, "truecolor"):
+		return modeRGB
+	case strings.Contains(term, "256"):
+		return mode256
+	case strings.Contains(term, "8color"), strings.Contains(term, "16color"):
+		return mode16
+	}
+
+	// TERM=screen is what tmux falls back to
+	// , the rest are terminals that never had more than 16 to begin with
+	switch term {
+	case "", "xterm", "screen", "linux", "vt100", "vt220", "ansi", "cons25", "dumb":
+		return mode16
+	}
+
+	// idk probably 256
+	return mode256
+}
+
+// redmean
+func colorDistance(ar, ag, ab, br, bg, bb int32) int64 {
+	mean := int64((ar + br) / 2)
+	dr, dg, db := int64(ar-br), int64(ag-bg), int64(ab-bb)
+	return (2+mean/256)*dr*dr + 4*dg*dg + (2+(255-mean)/256)*db*db
+}
+
+func nearestPalette(r, g, b int32, palette []tcell.Color) tcell.Color {
+	nearest, best := tcell.ColorDefault, int64(math.MaxInt64)
+	for _, entry := range palette {
+		pr, pg, pb := entry.RGB()
+		if d := colorDistance(r, g, b, pr, pg, pb); d < best {
+			nearest, best = entry, d
+		}
+	}
+	return nearest
+}
+
+func highlightColor(colour chroma.Colour) tcell.Color {
+	if !colour.IsSet() {
+		return tcell.ColorDefault
+	}
+	r, g, b := int32(colour.Red()), int32(colour.Green()), int32(colour.Blue())
+
+	if previewColor == modeRGB {
+		return tcell.NewRGBColor(r, g, b)
+	}
+
+	key := colorKey{previewColor, r, g, b}
+	if cached, ok := colorCache[key]; ok {
+		return cached
+	}
+
+	palette := palette256
+	if previewColor == mode16 {
+		palette = palette16
+	}
+	chosen := nearestPalette(r, g, b, palette)
+	colorCache[key] = chosen
+	return chosen
+}
+
 ///////////////
 // rendering //
 ///////////////
@@ -1252,8 +1377,7 @@ func DrawFilePreview(handle *os.File, x1, y1, x2, y2 int) {
 		entry := style.Get(token.Type)
 
 		tcellStyle := tcell.StyleDefault.
-			// they map directly
-			Foreground(tcell.NewRGBColor(int32(entry.Colour.Red()), int32(entry.Colour.Green()), int32(entry.Colour.Blue()))).
+			Foreground(highlightColor(entry.Colour)).
 			Background(tcell.ColorReset)
 
 		if entry.Bold == chroma.Yes {

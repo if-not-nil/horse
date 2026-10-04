@@ -70,6 +70,8 @@ Backspace:
 ```
   -p[review]=true
      show a file preview on the right side (default true)
+  -c[olor]=
+     colors for the preview: truecolor, 256 or 16 (default: guess from $TERM)
 ```
 
 **`todo**
