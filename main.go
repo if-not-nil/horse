@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/SerenaFontaine/kgp"
+	"github.com/charmbracelet/x/ansi/kitty"
 	"github.com/gdamore/tcell/v2"
 	"github.com/lithammer/fuzzysearch/fuzzy"
 	"github.com/mattn/go-runewidth"
@@ -91,25 +92,293 @@ func main() {
 		switch ev := ev.(type) {
 		case *tcell.EventResize:
 			width, height = screen.Size()
-			// force the image to be redrawn at the new size
-			if KittyShown != "" {
-				kittyClear()
-				KittyShown = ""
-			}
+			// virtual placement size changed!!! re place on next redraw
+			dropKitty()
 			screen.Sync()
 			Redraw()
 		case *tcell.EventKey:
+			// prompt input
 			if ActivePrompt.IsActive {
-				HandlePromptInput(ev)
+				submit, cancel := ActivePrompt.Input.HandleKey(ev)
+				switch {
+				case submit:
+					text := ActivePrompt.Input.Text()
+					ActivePrompt.OnSubmit(text)
+					ActivePrompt.IsActive = false
+					SwitchDir(Pwd)
+					screen.HideCursor()
+				case cancel:
+					ActivePrompt.IsActive = false
+					Selecting = false
+					screen.HideCursor()
+					Redraw()
+				}
 				Redraw()
 				continue
 			}
+			// inline rename/copy edit
 			if Edit != editNone {
-				HandleEditInput(ev)
+				submit, cancel := EditBuf.HandleKey(ev)
+				switch {
+				case submit:
+					commitEdit()
+				case cancel:
+					Edit = editNone
+					screen.HideCursor()
+				}
 				Redraw()
 				continue
 			}
-			HandleKey(ev)
+			switch ev.Key() {
+			// put the selected entry's full path on the clipboard
+			case tcell.KeyCtrlS:
+				if name, ok := currentName(); ok {
+					screen.SetClipboard([]byte(path.Join(Pwd, name)))
+				}
+
+			// launch the default opener, or run the file directly if it's executable
+			case tcell.KeyCtrlO:
+				func() {
+					name, ok := currentName()
+					if !ok {
+						return
+					}
+					fullPath := path.Join(Pwd, name)
+					os.Chdir(Pwd)
+					stat, err := os.Stat(fullPath)
+					isExec := err == nil && stat.Mode()&0o111 != 0
+					go func(p string) {
+						var cmd *exec.Cmd
+						switch runtime.GOOS {
+						case "linux":
+							if isExec {
+								cmd = exec.Command(p)
+							} else {
+								cmd = exec.Command("xdg-open", p)
+							}
+						case "darwin":
+							if isExec {
+								cmd = exec.Command(p)
+							} else {
+								cmd = exec.Command("open", p)
+							}
+						default:
+							screen.Fini()
+							fmt.Println("dont actually know how to open a file on your OS, pls submit an issue")
+							os.Exit(0)
+						}
+						_ = cmd.Run()
+					}(fullPath)
+				}()
+			// ask for y/n, then remove the selected entry
+			case tcell.KeyCtrlD:
+				name, ok := currentName()
+				if !ok {
+					break
+				}
+				fullPath := path.Join(Pwd, name)
+				OpenPrompt("delete "+name+"? (y/n): ", "", 0, func(input string) {
+					if strings.ToLower(input) == "y" {
+						os.RemoveAll(fullPath)
+						SwitchDir(Pwd)
+					}
+				})
+			// begin inline rename of the selected entry
+			case tcell.KeyCtrlR:
+				name, ok := currentName()
+				if !ok {
+					break
+				}
+				Edit = editRename
+				EditOrig = name
+				EditBuf.SetText(name)
+			// start inline copy of the selected entry
+			case tcell.KeyCtrlY:
+				name, ok := currentName()
+				if !ok {
+					break
+				}
+				Edit = editCopy
+				EditOrig = name
+				EditBuf.SetText(name)
+				// make room for the edit line below the source
+				vh := height - reservedRows
+				if Selected-TopIndex >= vh-1 {
+					TopIndex++
+				}
+			// multiselect
+			// first press marks, second runs bash on the marked set
+			case tcell.KeyCtrlX:
+				if !Selecting {
+					name, ok := currentName()
+					if !ok {
+						break
+					}
+					Selecting = true
+					Sel = map[string]bool{name: true}
+					LastMarked = name
+					MoveCursor(1)
+					break
+				}
+				names := selectedNames()
+				if len(names) == 0 {
+					Selecting = false
+					Sel = nil
+					break
+				}
+				// jump back to the last marked entry before asking what to run
+				list := CurrentList()
+				for i, n := range list {
+					if n == LastMarked {
+						Selected = i
+						visibleHeight := height - reservedRows
+						TopIndex = min(TopIndex, Selected)
+						TopIndex = max(TopIndex, Selected-visibleHeight+1)
+						break
+					}
+				}
+
+				token := func() string {
+					if len(names) == 1 {
+						return names[0]
+					}
+					return "{" + strings.Join(names, ",") + "}"
+				}()
+
+				// prefill " %" and park the cursor behind the space
+				OpenPrompt("bash (%=sel): ", " % ", 0, func(cmd string) {
+					if strings.TrimSpace(cmd) == "" {
+						return
+					}
+					final := cmd
+					if strings.Contains(final, "%") {
+						final = strings.ReplaceAll(final, "%", token)
+					} else {
+						final = final + " " + token
+					}
+					c := exec.Command("bash", "-c", final)
+					c.Dir = Pwd
+					_ = c.Run()
+					Selecting = false
+					Sel = nil
+				})
+
+			// new file/dir
+			case tcell.KeyCtrlA:
+				OpenPrompt("create: ", "", 0, func(name string) {
+					if name == "" {
+						return
+					}
+					fullPath := path.Join(Pwd, name)
+					lastDir := fullPath
+					if strings.HasSuffix(name, "/") {
+						os.MkdirAll(fullPath, 0o755)
+					} else {
+						dir := filepath.Dir(fullPath)
+						os.MkdirAll(dir, 0o755)
+						lastDir = dir
+
+						// idk how to handle this yet
+						_ = func() error {
+							f, err := os.OpenFile(fullPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
+							if err != nil {
+								// return err
+							}
+							return f.Close()
+						}()
+					}
+					SwitchDir(lastDir)
+				})
+			// leave multiselect, else quit entirely
+			case tcell.KeyEscape, tcell.KeyCtrlC:
+				if Selecting {
+					Selecting = false
+					Sel = nil
+					break
+				}
+				kittyClear()
+				screen.Fini()
+				os.Exit(0)
+			case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
+				MoveCursor(1)
+			case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
+				MoveCursor(-1)
+			// mark the entry in selection mode, or open/enter it otherwise
+			case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF, tcell.KeyRight:
+				if Selecting {
+					toggleSelect()
+					break
+				}
+				if Select() != "" {
+					quitOnSelect()
+				}
+
+			// quit and ask the shell to cd into the current dir or selection
+			case tcell.KeyEnter:
+				kittyClear()
+				screen.Fini()
+				var p string
+				if Input == "" {
+					p = Pwd
+				} else {
+					items := CurrentList()
+					if len(items) > 0 && Selected < len(items) {
+						p = filepath.Join(Pwd, items[Selected])
+					} else {
+						p = Pwd
+					}
+				}
+				fmt.Printf("cd %s\n", escapePath(p))
+				os.Exit(0)
+
+			// up a directory, shared with backspace-on-empty
+			case tcell.KeyCtrlH, tcell.KeyCtrlB:
+				upDir()
+			case tcell.KeyBackspace2, tcell.KeyLeft:
+				backspace(false)
+			case tcell.KeyCtrlW:
+				backspace(true)
+
+			// jump to $HOME, or to / if already there
+			case tcell.KeyCtrlE:
+				homeDir, err := os.UserHomeDir()
+				targetDir := homeDir
+				if err != nil || path.Clean(Pwd) == path.Clean(homeDir) {
+					targetDir = path.Clean("/")
+				}
+
+				SwitchDir(path.Clean(targetDir))
+
+			// toggle hidden files
+			case tcell.KeyCtrlV:
+				showHiddenFiles = !showHiddenFiles
+				_ = SwitchDir(Pwd)
+
+			case tcell.KeyRune:
+				// ~ jumps to the last dir, but only when not mid-search
+				if ev.Rune() == '~' && Input == "" {
+					if PrevDir == "" {
+						break
+					}
+					SwitchDir(PrevDir)
+				} else {
+					// filter as you type, ignore keystrokes that match nothing
+					r := ev.Rune()
+					if len(Input) >= maxInputLength {
+						break
+					}
+					modified := Input + string(r)
+					results := search(modified)
+					if len(results) == 0 {
+						break
+					}
+					Input = modified
+					Results = results
+					invalidateList()
+					Selected = 0
+					TopIndex = 0
+				}
+			}
 			Redraw()
 		}
 	}
@@ -173,254 +442,9 @@ const (
 	editCopy
 )
 
-//////////////////
-// key handling //
-//////////////////
-
-// HandleKey dispatches a key event in normal mode (no prompt or inline edit active)
-func HandleKey(ev *tcell.EventKey) {
-	switch ev.Key() {
-	case tcell.KeyCtrlS:
-		copySelectedPath()
-	case tcell.KeyCtrlO:
-		openSelected()
-	case tcell.KeyCtrlD:
-		promptDelete()
-	case tcell.KeyCtrlR:
-		startRename()
-	case tcell.KeyCtrlY:
-		startCopy()
-	case tcell.KeyCtrlX:
-		handleMultiSelect()
-	case tcell.KeyCtrlA:
-		promptCreate()
-	case tcell.KeyEscape, tcell.KeyCtrlC:
-		cancelOrQuit()
-	case tcell.KeyDown, tcell.KeyCtrlJ, tcell.KeyCtrlN:
-		MoveCursor(1)
-	case tcell.KeyUp, tcell.KeyCtrlK, tcell.KeyCtrlP:
-		MoveCursor(-1)
-	case tcell.KeyTab, tcell.KeyCtrlL, tcell.KeyCtrlF, tcell.KeyRight:
-		selectOrToggle()
-	case tcell.KeyEnter:
-		quitOnPwd()
-	// KeyCtrlH is the same code as backspace, and the actual backspace is KeyBackspace2
-	case tcell.KeyCtrlH, tcell.KeyCtrlB:
-		upDir()
-	case tcell.KeyBackspace2, tcell.KeyLeft:
-		backspace(false)
-	case tcell.KeyCtrlW:
-		backspace(true)
-	case tcell.KeyCtrlE:
-		toggleHome()
-	case tcell.KeyCtrlV:
-		toggleHiddenFiles()
-	case tcell.KeyRune:
-		if ev.Rune() == '~' && Input == "" {
-			// ~ jumps to the last dir, but only when not mid-search
-			togglePrevDir()
-		} else {
-			doInput(ev.Rune())
-		}
-	}
-}
-
-// copySelectedPath puts the selected entry's full path on the system clipboard
-func copySelectedPath() {
-	if p := SelectedPath(); p != "" {
-		screen.SetClipboard([]byte(p))
-	}
-}
-
-// openSelected launches the os's default opener, or runs the file directly if it's executable
-func openSelected() {
-	name, ok := currentName()
-	if !ok {
-		return
-	}
-	fullPath := path.Join(Pwd, name)
-	os.Chdir(Pwd)
-
-	stat, err := os.Stat(fullPath)
-	isExec := err == nil && stat.Mode()&0o111 != 0
-
-	go func(p string) {
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "linux":
-			if isExec {
-				cmd = exec.Command(p)
-			} else {
-				cmd = exec.Command("xdg-open", p)
-			}
-		case "darwin":
-			if isExec {
-				cmd = exec.Command(p)
-			} else {
-				cmd = exec.Command("open", p)
-			}
-		default:
-			screen.Fini()
-			fmt.Println("dont actually know how to open a file on your OS, pls submit an issue")
-			os.Exit(0)
-		}
-		_ = cmd.Run()
-	}(fullPath)
-}
-
-// ask for y/n confirmation, then remove selected entry
-func promptDelete() {
-	name, ok := currentName()
-	if !ok {
-		return
-	}
-	fullPath := path.Join(Pwd, name)
-
-	OpenPrompt("delete "+name+"? (y/n): ", "", 0, func(input string) {
-		if strings.ToLower(input) == "y" {
-			os.RemoveAll(fullPath)
-			SwitchDir(Pwd)
-		}
-	})
-}
-
-// begin inline rename of selected entry
-func startRename() {
-	name, ok := currentName()
-	if !ok {
-		return
-	}
-	Edit = editRename
-	EditOrig = name
-	EditBuf.SetText(name)
-}
-
-// begins inline copy of selected entry to new destination
-func startCopy() {
-	name, ok := currentName()
-	if !ok {
-		return
-	}
-	Edit = editCopy
-	EditOrig = name
-	EditBuf.SetText(name)
-
-	// make room for the edit line below the source
-	vh := height - reservedRows
-	if Selected-TopIndex >= vh-1 {
-		TopIndex++
-	}
-}
-
-// enter selection mode on first press;
-// on the second press it runs a bash command against everything that's been marked
-func handleMultiSelect() {
-	if !Selecting {
-		name, ok := currentName()
-		if !ok {
-			return
-		}
-		Selecting = true
-		Sel = map[string]bool{name: true}
-		LastMarked = name
-		MoveCursor(1)
-		return
-	}
-
-	names := selectedNames()
-	if len(names) == 0 {
-		Selecting = false
-		Sel = nil
-		return
-	}
-
-	// second C-x will jump back to last marked entry before asking
-	// what 2 run, so you see what youre working with
-	jumpTo(LastMarked)
-
-	token := braceList(names)
-
-	// prefill " %" and park cursor behind the space,
-	// so typing replaces selection placeholder
-	OpenPrompt("bash (%=sel): ", " % ", 0, func(cmd string) {
-		if strings.TrimSpace(cmd) == "" {
-			return
-		}
-		final := cmd
-		if strings.Contains(final, "%") {
-			final = strings.ReplaceAll(final, "%", token)
-		} else {
-			final = final + " " + token
-		}
-		c := exec.Command("bash", "-c", final)
-		c.Dir = Pwd
-		_ = c.Run()
-		Selecting = false
-		Sel = nil
-	})
-}
-
-// ask for new file/dir name (trailing "/" makes a dir),
-// creating missing parent directories along the way
-func promptCreate() {
-	OpenPrompt("create: ", "", 0, func(name string) {
-		if name == "" {
-			return
-		}
-		fullPath := path.Join(Pwd, name)
-		lastDir := fullPath
-		if strings.HasSuffix(name, "/") {
-			os.MkdirAll(fullPath, 0o755)
-		} else {
-			dir := filepath.Dir(fullPath)
-			os.MkdirAll(dir, 0o755)
-			lastDir = dir
-			_ = createNewFile(fullPath)
-		}
-		SwitchDir(lastDir)
-	})
-}
-
-func createNewFile(name string) error {
-	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
-	if err != nil {
-		return err
-	}
-	return f.Close()
-}
-
-// exit multi-select mode, or quit horse entirely
-func cancelOrQuit() {
-	if Selecting {
-		Selecting = false
-		Sel = nil
-		return
-	}
-	kittyClear()
-	screen.Fini()
-	os.Exit(0)
-}
-
-// mark current entry in selection mode, or open/enter it otherwise
-func selectOrToggle() {
-	if Selecting {
-		toggleSelect()
-		return
-	}
-	if Select() != "" {
-		quitOnSelect()
-	}
-}
-
-// jump to $HOME, or to / if we're already there
-func toggleHome() {
-	homeDir, err := os.UserHomeDir()
-	targetDir := homeDir
-	if err != nil || path.Clean(Pwd) == path.Clean(homeDir) {
-		targetDir = path.Clean("/")
-	}
-	SwitchDir(path.Clean(targetDir))
-}
+//////////////
+// quitting //
+//////////////
 
 // quit horse and ask shell to open $EDITOR on selected file
 func quitOnSelect() {
@@ -431,25 +455,6 @@ func quitOnSelect() {
 		os.Exit(0)
 	}
 	fmt.Printf("$EDITOR %s\n", escapePath(selectedPath))
-	os.Exit(0)
-}
-
-// quit horse and ask shell to cd into current directory or selection
-func quitOnPwd() {
-	kittyClear()
-	screen.Fini()
-	var p string
-	if Input == "" {
-		p = Pwd
-	} else {
-		items := CurrentList()
-		if len(items) > 0 && Selected < len(items) {
-			p = filepath.Join(Pwd, items[Selected])
-		} else {
-			p = Pwd
-		}
-	}
-	fmt.Printf("cd %s\n", escapePath(p))
 	os.Exit(0)
 }
 
@@ -464,7 +469,7 @@ type LineEditor struct {
 
 // ret an editor holding text with the cursor at pos
 // OOR pos clamps into [0, len(text)]
-func NewLineEditor(text string, pos int) LineEditor {
+func newLineEditor(text string, pos int) LineEditor {
 	b := []rune(text)
 	if pos < 0 {
 		pos = 0
@@ -622,46 +627,14 @@ func OpenPrompt(label, initial string, cursor int, onSubmit func(string)) {
 	ActivePrompt = Prompt{
 		IsActive: true,
 		Label:    label,
-		Input:    NewLineEditor(initial, cursor),
+		Input:    newLineEditor(initial, cursor),
 		OnSubmit: onSubmit,
-	}
-}
-
-func HandlePromptInput(ev *tcell.EventKey) {
-	submit, cancel := ActivePrompt.Input.HandleKey(ev)
-	switch {
-	case submit:
-		text := ActivePrompt.Input.Text()
-		ActivePrompt.OnSubmit(text)
-		ActivePrompt.IsActive = false
-		SwitchDir(Pwd)
-		screen.HideCursor()
-	case cancel:
-		ActivePrompt.IsActive = false
-		Selecting = false
-		screen.HideCursor()
-		Redraw()
 	}
 }
 
 /////////////////
 // inline edit //
 /////////////////
-
-// rename (C-r) and copy (C-y) are both "edit a name inline, then apply it
-// to the filesystem", so they share one state machine distinguished by Edit
-
-// HandleEditInput feeds a key event to the active inline edit (rename or copy)
-func HandleEditInput(ev *tcell.EventKey) {
-	submit, cancel := EditBuf.HandleKey(ev)
-	switch {
-	case submit:
-		commitEdit()
-	case cancel:
-		Edit = editNone
-		screen.HideCursor()
-	}
-}
 
 // apply active rename or copy and reselects result
 // leave original untouched if target dir can't be created
@@ -694,17 +667,16 @@ func commitEdit() {
 	}
 
 	SwitchDir(Pwd)
-	selectByName(filepath.Base(name))
-}
 
-// put cursor on entry called name in current dir, if present
-func selectByName(name string) {
+	// reselect the result by its new base name
+	name = filepath.Base(name)
 	for i, f := range Files {
 		if f.Name() == name {
 			Selected = i
 			break
 		}
 	}
+
 	visibleHeight := height - reservedRows
 	if Selected >= visibleHeight {
 		TopIndex = Selected - visibleHeight + 1
@@ -747,14 +719,6 @@ func selectedNames() []string {
 		}
 	}
 	return out
-}
-
-// braceList makes {a,b,c} like the readme wants, or just the name for one
-func braceList(names []string) string {
-	if len(names) == 1 {
-		return names[0]
-	}
-	return "{" + strings.Join(names, ",") + "}"
 }
 
 /////////////////
@@ -802,14 +766,6 @@ func copyPath(src, dst string) error {
 		return err
 	}
 	return out.Chmod(info.Mode())
-}
-
-func SelectedPath() string {
-	name, ok := currentName()
-	if !ok {
-		return ""
-	}
-	return path.Join(Pwd, name)
 }
 
 func Select() string {
@@ -937,6 +893,13 @@ type kittyCacheEntry struct {
 
 var kittyCache = map[string]kittyCacheEntry{}
 
+// fixed id for single preview image
+// fg color gets  it to the placeholders
+const kittyPreviewID uint32 = 1
+
+// size of the current virtual placement, so resizes re-place even for the same file
+var kittyShownCols, kittyShownRows int
+
 // previewImagePath returns the selected file if it's an image we can show, else ""
 func previewImagePath() string {
 	if !kittyOK || !showPreview {
@@ -971,43 +934,23 @@ func previewImagePath() string {
 	return ""
 }
 
-// reconcileKitty draws want in the preview pane, or clears it, only when it changes
-func reconcileKitty(want string) {
-	if !kittyOK || want == KittyShown {
+// transmit want and sizes its virtual placement to c x r
+func ensureKitty(want string, png []byte, c, r int) {
+	if want != KittyShown || c != kittyShownCols || r != kittyShownRows {
+		kittyPlace(png, c, r)
+		KittyShown = want
+		kittyShownCols, kittyShownRows = c, r
+	}
+}
+
+// delete the preview image and forgets what was shown
+func dropKitty() {
+	if KittyShown == "" {
 		return
 	}
-	if KittyShown != "" {
-		kittyClear()
-	}
+	kittyClear()
 	KittyShown = ""
-	if want == "" {
-		return
-	}
-
-	data, err := os.ReadFile(want)
-	if err != nil {
-		return
-	}
-	// pull the pixel dims before resizing, to keep the aspect ratio
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return
-	}
-
-	cols := width - width/2 - 1
-	rows := height - 1
-	if cols < 1 || rows < 1 {
-		return
-	}
-	// fit into the pane without stretching, then place at its top-left (1-based)
-	c, r := fitCells(cfg.Width, cfg.Height, cols, rows)
-	data, err = kittyPNG(want, data, cfg.Width, cfg.Height, c, r)
-	if err != nil {
-		return
-	}
-
-	kittyPlace(data, width/2+1, 1, c, r)
-	KittyShown = want
+	kittyShownCols, kittyShownRows = 0, 0
 }
 
 // ret: png bytes of want resized to fit a c x r cell placement
@@ -1124,23 +1067,21 @@ func wrapTmux(seq string) string {
 func kittyClear() {
 	if !kittyOK || ttyFile == nil {
 		return
-	} else {
-		fmt.Fprint(ttyFile, wrapTmux(kgp.DeleteAllFree().Encode()))
 	}
+	// per-id delete, otherwise other programs' images die
+	fmt.Fprint(ttyFile, wrapTmux(kgp.NewDelete(kgp.DeleteByImageIDFree).ImageID(kittyPreviewID).ResponseSuppression(kgp.ResponseOKOnly).Build().Encode()))
 }
 
-// kittyPlace transmits a png and displays it, scaled into cols x rows cells at (col,row)
-func kittyPlace(png []byte, col, row, cols, rows int) {
+// upload png under preview id and size its virtual placement
+func kittyPlace(png []byte, cols, rows int) {
 	if ttyFile == nil {
 		return
 	}
-	cmd := kgp.NewTransmitDisplay().
+	// upload but dont display yet
+	tx := kgp.NewTransmit().
+		ImageID(kittyPreviewID).
 		Format(kgp.FormatPNG).
 		TransmitDirect(png).
-		DisplaySize(cols, rows).
-		// if we let the terminal move it past the image itll render the image at 0, 0 sometimes
-		CursorMovement(false).
-		// otherwise it might pollute tcell
 		ResponseSuppression(kgp.ResponseOKOnly).
 		Build()
 
@@ -1153,11 +1094,27 @@ func kittyPlace(png []byte, col, row, cols, rows int) {
 
 	// this HAS to stay one buffered flush
 	w := bufio.NewWriter(ttyFile)
-	fmt.Fprintf(w, "\x1b[%d;%dH", row, col)
-	for _, seq := range cmd.EncodeChunked(chunk) {
+	for _, seq := range tx.EncodeChunked(chunk) {
 		w.WriteString(wrapTmux(seq))
 	}
 	w.Flush()
+
+	// replace the virtual placement sized to the preview pane
+	del := kgp.NewDelete(kgp.DeleteByImageID).ImageID(kittyPreviewID).ResponseSuppression(kgp.ResponseOKOnly).Build()
+	put := kgp.NewPut(kittyPreviewID).DisplaySize(cols, rows).VirtualPlacement().ResponseSuppression(kgp.ResponseOKOnly).Build()
+	fmt.Fprint(ttyFile, wrapTmux(del.Encode()))
+	fmt.Fprint(ttyFile, wrapTmux(put.Encode()))
+}
+
+// fill a cols x rows grid at (x0,y0) with image placeholders for preview id
+func drawKittyPlaceholders(x0, y0, cols, rows int) {
+	fg := tcell.NewRGBColor(int32(kittyPreviewID>>16&0xff), int32(kittyPreviewID>>8&0xff), int32(kittyPreviewID&0xff))
+	style := tcell.StyleDefault.Foreground(fg).Background(tcell.ColorReset)
+	for r := range rows {
+		for c := range cols {
+			screen.SetContent(x0+c, y0+r, kitty.Placeholder, []rune{kitty.Diacritic(r), kitty.Diacritic(c)}, style)
+		}
+	}
 }
 
 ///////////////////
@@ -1247,17 +1204,6 @@ func colorDistance(ar, ag, ab, br, bg, bb int32) int64 {
 	return (2+mean/256)*dr*dr + 4*dg*dg + (2+(255-mean)/256)*db*db
 }
 
-func nearestPalette(r, g, b int32, palette []tcell.Color) tcell.Color {
-	nearest, best := tcell.ColorDefault, int64(math.MaxInt64)
-	for _, entry := range palette {
-		pr, pg, pb := entry.RGB()
-		if d := colorDistance(r, g, b, pr, pg, pb); d < best {
-			nearest, best = entry, d
-		}
-	}
-	return nearest
-}
-
 func highlightColor(colour chroma.Colour) tcell.Color {
 	if !colour.IsSet() {
 		return tcell.ColorDefault
@@ -1277,7 +1223,15 @@ func highlightColor(colour chroma.Colour) tcell.Color {
 	if previewColor == mode16 {
 		palette = palette16
 	}
-	chosen := nearestPalette(r, g, b, palette)
+
+	chosen, best := tcell.ColorDefault, int64(math.MaxInt64)
+	for _, entry := range palette {
+		pr, pg, pb := entry.RGB()
+		if d := colorDistance(r, g, b, pr, pg, pb); d < best {
+			chosen, best = entry, d
+		}
+	}
+
 	colorCache[key] = chosen
 	return chosen
 }
@@ -1287,8 +1241,6 @@ func highlightColor(colour chroma.Colour) tcell.Color {
 ///////////////
 
 func Redraw() {
-	wantImg := previewImagePath()
-	defer reconcileKitty(wantImg) // emit after tcell has flushed, so it lands on top
 	screen.Clear()
 
 	files := Files
@@ -1297,6 +1249,8 @@ func Redraw() {
 	}
 
 	if len(files) == 0 {
+		// nothing to preview, so a stale image must go
+		dropKitty()
 		DrawFiles()
 		screen.Show()
 		return
@@ -1305,7 +1259,45 @@ func Redraw() {
 	selectedEntry := files[Selected]
 	fullPath := path.Join(Pwd, selectedEntry.Name())
 
-	if showPreview && wantImg == "" {
+	wantImg := ""
+	if showPreview {
+		wantImg = previewImagePath()
+	}
+
+	// image preview at the cell grid
+	// clear removes it and tab switches keep it
+	if wantImg != "" {
+		cols := width - width/2 - 1
+		rows := height - 1
+
+		if cols >= 1 && rows >= 1 {
+			if data, err := os.ReadFile(wantImg); err == nil {
+				// pull pixel dims before resizing, to keep aspect ratio
+				if cfg, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil {
+					// fit into pane without stretching
+					c, r := fitCells(cfg.Width, cfg.Height, cols, rows)
+					if png, err := kittyPNG(wantImg, data, cfg.Width, cfg.Height, c, r); err == nil {
+						ensureKitty(wantImg, png, c, r)
+						DrawFiles()
+						// on top of file list
+						drawKittyPlaceholders(width/2, 0, c, r)
+						screen.Show()
+						return
+					}
+				}
+			}
+		}
+		// couldn't show it!!! don't leave the previous one up
+		dropKitty()
+		DrawFiles()
+		screen.Show()
+		return
+	}
+
+	// no image!!! drop any stale placement before drawing text below
+	dropKitty()
+
+	if showPreview {
 		if isDirEntry(fullPath, selectedEntry) {
 			DrawDirPreview(fullPath, width/2, 0, width-1, height-1)
 		} else {
@@ -1591,23 +1583,11 @@ func drawText(x1, y1, x2, y2 int, style tcell.Style, text string) {
 // input & ux //
 ////////////////
 
-func togglePrevDir() {
-	if PrevDir == "" {
-		return
-	}
-	SwitchDir(PrevDir)
-}
-
-func toggleHiddenFiles() {
-	showHiddenFiles = !showHiddenFiles
-	_ = SwitchDir(Pwd)
-}
-
 func upDir() {
 	splitPwd := strings.Split(strings.TrimSuffix(Pwd, "/"), "/")
 	if len(splitPwd) > 1 {
 		newPwd := strings.Join(splitPwd[:len(splitPwd)-1], "/")
-		SwitchDir(fmt.Sprint("/", newPwd))
+		SwitchDir("/" + newPwd)
 	}
 }
 
@@ -1633,25 +1613,6 @@ func backspace(fullWord bool) {
 	} else {
 		Results = results
 	}
-	invalidateList()
-	Selected = 0
-	TopIndex = 0
-}
-
-func doInput(r rune) {
-	if len(Input) >= maxInputLength {
-		return
-	}
-
-	modified := Input + string(r)
-	results := search(modified)
-
-	if len(results) == 0 {
-		return
-	}
-
-	Input = modified
-	Results = results
 	invalidateList()
 	Selected = 0
 	TopIndex = 0
@@ -1756,21 +1717,6 @@ func MoveCursor(n int) {
 	visibleHeight := height - reservedRows
 	TopIndex = min(TopIndex, Selected)
 	TopIndex = max(TopIndex, Selected-visibleHeight+1)
-}
-
-// put cursor on named entry and scroll it into view
-// unknown names are ignored
-func jumpTo(name string) {
-	list := CurrentList()
-	for i, n := range list {
-		if n == name {
-			Selected = i
-			visibleHeight := height - reservedRows
-			TopIndex = min(TopIndex, Selected)
-			TopIndex = max(TopIndex, Selected-visibleHeight+1)
-			return
-		}
-	}
 }
 
 /////////////
