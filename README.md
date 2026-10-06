@@ -5,6 +5,7 @@
 **`how to use**
 
 ```bash
+# this will install it to GOPATH. you can just `go build` this repo to get the binary instead
 go install github.com/if-not-nil/horse@latest
 # if you haven't tamed the horse yet, do this to see what the consequences of your actions could be
 horse
@@ -30,20 +31,20 @@ Down, <C-J>, <C-N>:
     cursor down
 Up, <C-K>, <C-P>:
     cursor up
-C-w:
+C-w[ord]:
     delete word
 C-e:
     go to `~` or `/`
-C-a:
+C-a[dd]:
     bring up a prompt for creating files/directories (try qwer/asdf/zx)
-C-s:
+C-s[ave]:
     copy the selected item's path
-C-r:
+C-r[ename]:
     rename the selected item inline
     type a path (a/b/c) to move it
-C-y:
+C-y[ank]:
     copy the selected file/dir
-C-x:
+C-x[ecute]:
     start selection, mark current file
 
     when selecting, run a bash command on the selection
@@ -62,7 +63,7 @@ Enter:
     cd to current/selected directory
 Backspace:
     erase a character or go back a directory
-~:
+~[above tab]:
     jump back to the last directory you were in (toggles)
 ```
 
@@ -75,5 +76,8 @@ Backspace:
 ```
 
 **`todo**
-[ ] shared configurable read-line component for all inputs
+[x] shared configurable read-line component for all inputs
+\ \ [ ] make it good
 [ ] consolidate more ops into C-x mode
+\ \ [ ] delete
+\ \ [ ] open
