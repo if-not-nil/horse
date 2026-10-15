@@ -730,8 +730,10 @@ func selectedNames() []string {
 // fs & search //
 /////////////////
 
+// sorts in place per option
 func sortEntries(dir string, entries []os.DirEntry, option sortKind) {
 	switch option {
+	// sorts as the order ReadDir returns already
 	case sortAlphabetically:
 		sort.SliceStable(entries, func(i int, j int) bool {
 			return entries[i].Name() < entries[j].Name()
@@ -744,6 +746,17 @@ func sortEntries(dir string, entries []os.DirEntry, option sortKind) {
 		}
 		sort.SliceStable(entries, func(i int, j int) bool {
 			return isDir[entries[i].Name()] && !isDir[entries[j].Name()]
+		})
+	case sortLastModified:
+		mtimes := make(map[string]int64, len(entries))
+		for _, entry := range entries {
+			if info, err := entry.Info(); err == nil {
+				// entries whose Info() failed get year 1970 and go to the bottom
+				mtimes[entry.Name()] = info.ModTime().UnixNano()
+			}
+		}
+		sort.SliceStable(entries, func(i int, j int) bool {
+			return mtimes[entries[i].Name()] > mtimes[entries[j].Name()]
 		})
 	}
 }
@@ -907,6 +920,7 @@ type sortKind int
 const (
 	sortAlphabetically sortKind = iota
 	sortDirectoriesFirst
+	sortLastModified
 	sortModeCount
 )
 
@@ -914,8 +928,9 @@ var sortOption sortKind
 
 // current sortKind shown after the position counter
 var sortLabels = [sortModeCount]string{
-	sortAlphabetically:   "alphabetical",
+	sortAlphabetically:   "",
 	sortDirectoriesFirst: "dirs first",
+	sortLastModified:     "last modified",
 }
 
 ///////////////////////////
@@ -1440,6 +1455,7 @@ func DrawDirPreview(fullPath string, x1, y1, x2, y2 int) {
 	}
 
 	dirEntries = filterHidden(dirEntries)
+	sortEntries(fullPath, dirEntries, sortOption)
 
 	for y, entry := range dirEntries {
 		isDir := isDirEntry(path.Join(fullPath, entry.Name()), entry)
@@ -1477,7 +1493,6 @@ func DrawFiles() {
 		if label := sortLabels[sortOption]; label != "" && len(Results) == 0 {
 			scrollInfo += " " + label
 		}
-		drawText(1, 0, 999, 0, STYLE_MID, scrollInfo)
 		drawText(1, 0, 999, 0, STYLE_MID, scrollInfo)
 	}
 
