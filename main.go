@@ -354,6 +354,11 @@ func main() {
 				showHiddenFiles = !showHiddenFiles
 				_ = SwitchDir(Pwd)
 
+			// sort mode cycling
+			case tcell.KeyCtrlT:
+				sortOption = (sortOption + 1) % sortModeCount
+				_ = SwitchDir(Pwd)
+
 			case tcell.KeyRune:
 				// ~ jumps to the last dir, but only when not mid-search
 				if ev.Rune() == '~' && Input == "" {
@@ -379,8 +384,8 @@ func main() {
 					TopIndex = 0
 				}
 			}
-			Redraw()
 		}
+		Redraw()
 	}
 }
 
@@ -725,6 +730,24 @@ func selectedNames() []string {
 // fs & search //
 /////////////////
 
+func sortEntries(dir string, entries []os.DirEntry, option sortKind) {
+	switch option {
+	case sortAlphabetically:
+		sort.SliceStable(entries, func(i int, j int) bool {
+			return entries[i].Name() < entries[j].Name()
+		})
+	case sortDirectoriesFirst:
+		isDir := make(map[string]bool, len(entries))
+		for _, entry := range entries {
+			fp := path.Join(dir, entry.Name())
+			isDir[entry.Name()] = isDirEntry(fp, entry)
+		}
+		sort.SliceStable(entries, func(i int, j int) bool {
+			return isDir[entries[i].Name()] && !isDir[entries[j].Name()]
+		})
+	}
+}
+
 // copies a file or a whole dir, keeping perms
 func copyPath(src, dst string) error {
 	info, err := os.Stat(src)
@@ -815,7 +838,7 @@ func SwitchDir(where string) error {
 	}
 
 	files = filterHidden(files)
-
+	sortEntries(newPwd, files, sortOption)
 	// remember the dir we came from so ~ can jump back
 	if Pwd != "" && Pwd != newPwd {
 		PrevDir = Pwd
@@ -877,6 +900,22 @@ func filterHidden(entries []os.DirEntry) []os.DirEntry {
 		}
 	}
 	return visible
+}
+
+type sortKind int
+
+const (
+	sortAlphabetically sortKind = iota
+	sortDirectoriesFirst
+	sortModeCount
+)
+
+var sortOption sortKind
+
+// current sortKind shown after the position counter
+var sortLabels = [sortModeCount]string{
+	sortAlphabetically:   "alphabetical",
+	sortDirectoriesFirst: "dirs first",
 }
 
 ///////////////////////////
@@ -1434,6 +1473,11 @@ func DrawFiles() {
 		drawText(1, 0, 999, 0, STYLE_DIR, selInfo)
 	} else {
 		scrollInfo := fmt.Sprintf("[%d/%d]", Selected+1, len(filesToShow))
+		// the mode only orders the plain listing, search results are ranked by relevance
+		if label := sortLabels[sortOption]; label != "" && len(Results) == 0 {
+			scrollInfo += " " + label
+		}
+		drawText(1, 0, 999, 0, STYLE_MID, scrollInfo)
 		drawText(1, 0, 999, 0, STYLE_MID, scrollInfo)
 	}
 
