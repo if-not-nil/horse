@@ -55,6 +55,8 @@ C-d[elete]:
     delete the selected file or directory
 C-v[isibility]:
     toggle the visibility of hidden files
+C-t[Sort]:
+    cycle through directory sorting modes
 Left, C-h, C-b:
     go up a directory
 Tab, Right, C-l, C-f:
