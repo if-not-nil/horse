@@ -46,6 +46,9 @@ func main() {
 	flag.BoolVar(&showPreview, "p", true, "alias for -preview")
 	flag.StringVar(&colorOverride, "color", "", "truecolor, 256 or 16 (default guesses)")
 	flag.StringVar(&colorOverride, "c", "", "alias for -color")
+	flag.BoolVar(&showHiddenFiles, "all", true, "show hidden files")
+	flag.BoolVar(&showHiddenFiles, "a", true, "alias for -all")
+
 	flag.Parse()
 	previewColor = detectColorMode(colorOverride)
 
