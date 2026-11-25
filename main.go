@@ -47,9 +47,13 @@ func main() {
 	flag.StringVar(&colorOverride, "color", "", "truecolor, 256 or 16 (default guesses)")
 	flag.StringVar(&colorOverride, "c", "", "alias for -color")
 	flag.BoolVar(&showHiddenFiles, "all", true, "show hidden files")
-	flag.BoolVar(&showHiddenFiles, "a", true, "alias for -all")
+	var noHidden bool
+	flag.BoolVar(&noHidden, "A", false, "alias for -all=false")
 
 	flag.Parse()
+	if noHidden {
+		showHiddenFiles = false
+	}
 	previewColor = detectColorMode(colorOverride)
 
 	s, err := tcell.NewScreen()
